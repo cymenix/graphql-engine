@@ -34,7 +34,8 @@
     in
     {
       packages = rec {
-        graphql-server = pkgs.haskell.packages.${pkgs.ghcName}.graphql-server;
+        inherit (pkgs.haskell.packages.${pkgs.ghcName})
+          graphql-server pg-client-hs;
         default = graphql-server;
       };
 
