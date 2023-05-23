@@ -33,8 +33,9 @@
       pkgs = import ./nix/nixpkgs.nix { inherit nixpkgs system; };
     in
     {
-      packages = {
-        graphql-parser = pkgs.haskell.packages.${pkgs.ghcName}.graphql-parser;
+      packages = rec {
+        graphql-server = pkgs.haskell.packages.${pkgs.ghcName}.graphql-server;
+        default = graphql-server;
       };
 
       formatter = pkgs.nixpkgs-fmt;

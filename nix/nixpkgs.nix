@@ -10,6 +10,7 @@ import nixpkgs {
     ];
   };
   overlays = [
+    (import ./overlays/packages.nix)
     (import ./overlays/ghc.nix)
     (import ./overlays/ormolu.nix)
     (import ./overlays/msodbcsql18.nix)
