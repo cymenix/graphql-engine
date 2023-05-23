@@ -43,7 +43,7 @@ import Data.Text.Extended ((<>>))
 import Data.Time.Clock
 import Data.Time.Clock qualified as TC
 import Data.Word (Word16)
-import GHC.AssertNF.CPP
+import GHC.AssertNF
 import Hasura.App.State
 import Hasura.Backends.DataConnector.Agent.Client (AgentLicenseKey)
 import Hasura.Backends.Postgres.Instances.Transport (runPGMutationTransaction)

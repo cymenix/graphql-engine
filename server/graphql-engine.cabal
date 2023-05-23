@@ -328,6 +328,7 @@ common lib-depends
                      , split
                      , string-interpolate
                      , template-haskell
+                     , ghc-heap-view
                      , text
                      , text-builder >= 0.6
                      , th-lift
