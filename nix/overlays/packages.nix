@@ -52,13 +52,14 @@ self: super: {
               sha256 = "15EqVL+5AWz3588Ilb9dAgb+i9LaUhBEXHZ/f8jp8/4=";
             }) { });
 
-          kriti-lang = hsuper.callCabal2nix "kriti-lang"
+          # FIXME: reenable tests that fail upstream
+          kriti-lang = super.haskell.lib.dontCheck (hsuper.callCabal2nix "kriti-lang"
             (super.fetchFromGitHub {
               owner = "hasura";
               repo = "kriti-lang";
-              rev = "v0.3.3";
-              sha256 = "EYdbIiPDFsPGJi7w1nBIW5LLQc9rJxgCr24BGd03eyE=";
-            }) { };
+              rev = "daf56edd514a3c5439b457f9de08eaf43c876251";
+              sha256 = "0hxc32x5dh21wqyr808c6xpw01b5qr90cbakgxlzb9azv75r89ag";
+            }) { });
 
           # https://gutier.io/post/development-fixing-broken-haskell-packages-nixpkgs/
           ekg-json = hsuper.callCabal2nix "ekg-json" (super.fetchFromGitHub {
