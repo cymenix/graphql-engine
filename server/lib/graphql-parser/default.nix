@@ -1,4 +1,4 @@
-{ mkDerivation, aeson, attoparsec, base, bytestring, deepseq
+{ mkDerivation, aeson, attoparsec, autodocodec, base, bytestring, deepseq
 , hashable, hedgehog, lib, prettyprinter, scientific, tasty-bench
 , template-haskell, text, text-builder, th-compat
 , th-lift-instances, unordered-containers
@@ -8,7 +8,7 @@ mkDerivation {
   version = "0.2.0.0";
   src = ./.;
   libraryHaskellDepends = [
-    aeson attoparsec base bytestring deepseq hashable hedgehog
+    aeson attoparsec autodocodec base bytestring deepseq hashable hedgehog
     prettyprinter scientific template-haskell text text-builder
     th-compat th-lift-instances unordered-containers
   ];

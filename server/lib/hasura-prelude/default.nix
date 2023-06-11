@@ -1,4 +1,4 @@
-{ mkDerivation, aeson, autodocodec, aeson-casing, base, base64-bytestring
+{ mkDerivation, aeson, aeson-casing, autodocodec, base, base64-bytestring
 , bytestring, containers, deepseq, hashable
 , insert-ordered-containers, lens, lib, mtl, nonempty-containers
 , pretty-simple, text, time, transformers, transformers-base
@@ -9,7 +9,7 @@ mkDerivation {
   version = "0.1.0.0";
   src = ./.;
   libraryHaskellDepends = [
-    aeson autodocodec aeson-casing base base64-bytestring bytestring containers
+    aeson aeson-casing autodocodec base base64-bytestring bytestring containers
     deepseq hashable insert-ordered-containers lens mtl
     nonempty-containers pretty-simple text time transformers
     transformers-base unordered-containers witherable
