@@ -62,10 +62,10 @@ self: super: {
 
           # https://gutier.io/post/development-fixing-broken-haskell-packages-nixpkgs/
           ekg-json = hsuper.callCabal2nix "ekg-json" (super.fetchFromGitHub {
-            owner = "hasura";
+            owner = "tracsis";
             repo = "ekg-json";
-            rev = "1fab6837e1dd98317a3c2f5bf9deedf4dfcac51b";
-            sha256 = "V+doY0SjMqouPt6azS63hAlGFtr9m4fs0K6ghEF6JTQ=";
+            rev = "504a8f57e4dc69408f1687e775e9fc4ae2c1511d";
+            sha256 = "1jalpf01yxhfwbv9l9garn1g4x0qfwr3jrr25fd58p3v5vhjhyrp";
           }) { };
 
           ci-info = hsuper.callCabal2nix "ci-info" (super.fetchFromGitHub {
