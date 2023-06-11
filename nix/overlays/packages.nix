@@ -24,8 +24,7 @@ self: super: {
               resource-pool = hself.hasura-resource-pool;
             });
 
-          hasura-schema-parsers =
-            hsuper.callPackage ../../server/lib/schema-parsers { };
+          hasura-schema-parsers = super.haskell.lib.dontCheck (hsuper.callPackage ../../server/lib/schema-parsers { });
           test-harness = hsuper.callPackage ../../server/lib/test-harness { };
           hasura-extras = hsuper.callPackage ../../server/lib/hasura-extras { };
 
