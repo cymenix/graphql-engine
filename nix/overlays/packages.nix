@@ -37,7 +37,7 @@ self: super: {
               hedgehog = hself.hedgehog_1_2;
               immortal = hself.immortal_0_2_2_1;
               pg-client = hself.pg-client;
-              odbc = hself.hasura-odbc;
+              odbc = hself.odbc;
               resource-pool = hself.hasura-resource-pool;
             })));
 
@@ -90,12 +90,12 @@ self: super: {
               sha256 = "a8dzt1f/TwVG37rOsL/Bh2K90cDnGgj7HVpL0S3r59A=";
             }) { };
 
-          hasura-odbc = super.haskell.lib.dontCheck (hsuper.callCabal2nix "odbc"
+          odbc = super.haskell.lib.dontCheck (hsuper.callCabal2nix "odbc"
             (super.fetchFromGitHub {
               owner = "fpco";
               repo = "odbc";
               rev = "38e04349fe28a91f189e44bd7783220956d18aae";
-              sha256 = "V9MMQTJ6j/lHv0HA34J6XM2dsbT/XTVi6MCCaUpomyo=";
+              sha256 = "0alvd156k0n0x1i3apgznjqrvkawga1dzh21px3zk3vs690hrlsp";
             }) { });
 
           # broken dependency fixe
