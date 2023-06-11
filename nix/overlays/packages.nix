@@ -36,12 +36,12 @@ self: super: {
             })));
 
           # FIXME: for remote repos we have to calculate their default.nix until they get upstreamed/maintained
-          ekg-core = hsuper.callCabal2nix "ekg-core" (super.fetchFromGitHub {
-            owner = "hasura";
-            repo = "ekg-core";
-            rev = "b0cdc337ca2a52e392d427916ba3e28246b396c0";
-            sha256 = "5hdk6OA6fmXFYxt69mwlFDzCd/sxQIm3kc+NreJBy+s=";
-          }) { };
+          # ekg-core = hsuper.callCabal2nix "ekg-core" (super.fetchFromGitHub {
+          #   owner = "hasura";
+          #   repo = "ekg-core";
+          #   rev = "b0cdc337ca2a52e392d427916ba3e28246b396c0";
+          #   sha256 = "5hdk6OA6fmXFYxt69mwlFDzCd/sxQIm3kc+NreJBy+s=";
+          # }) { };
 
           # https://gutier.io/post/development-fixing-broken-haskell-packages-nixpkgs/
           ekg-prometheus = super.haskell.lib.doJailbreak
