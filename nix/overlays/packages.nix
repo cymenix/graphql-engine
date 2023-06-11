@@ -98,6 +98,13 @@ self: super: {
             super.haskell.lib.doJailbreak hsuper.servant-openapi3;
           ghc-heap-view =
             super.haskell.lib.disableLibraryProfiling hsuper.ghc-heap-view;
+
+          th-extras = hsuper.callCabal2nix "th-extras" (super.fetchFromGitHub {
+            owner = "erikd";
+            repo = "th-extras";
+            rev = "5d30687fd1da66386fc582fb685e4e95c23f9b24";
+            sha256 = "0abpki0y8y4cavv3k1sbqa3jc62rjr8bj7l8j313kjhn6v4hhg1c";
+          }) { };
         };
       };
     };
