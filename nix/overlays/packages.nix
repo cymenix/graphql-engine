@@ -12,13 +12,13 @@ self: super: {
           hasura-error-message =
             hsuper.callPackage ../../server/lib/error-message { };
           graphql-parser =
-            hsuper.callPackage ../../server/lib/graphql-parser-hs {
+            hsuper.callPackage ../../server/lib/graphql-parser {
               hedgehog = hself.hedgehog_1_2;
             };
           hasura-prelude =
             hsuper.callPackage ../../server/lib/hasura-prelude { };
-          pg-client-hs = super.haskell.lib.dontCheck
-            (hsuper.callPackage ../../server/lib/pg-client-hs {
+          pg-client = super.haskell.lib.dontCheck
+            (hsuper.callPackage ../../server/lib/pg-client {
               resource-pool = hself.hasura-resource-pool;
             });
 
@@ -30,7 +30,7 @@ self: super: {
             ((super.haskell.lib.dontCheck (hsuper.callPackage ../../server {
               hedgehog = hself.hedgehog_1_2;
               immortal = hself.immortal_0_2_2_1;
-              pg-client = hself.pg-client-hs;
+              pg-client = hself.pg-client;
               odbc = hself.hasura-odbc;
               resource-pool = hself.hasura-resource-pool;
             })));
