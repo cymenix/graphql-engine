@@ -10,7 +10,6 @@ import nixpkgs {
     ];
   };
   overlays = [
-    (import ./overlays/packages.nix)
     (import ./overlays/ghc.nix)
     (import ./overlays/ormolu.nix)
     (import ./overlays/msodbcsql18.nix)
@@ -19,5 +18,6 @@ import nixpkgs {
     (import ./overlays/dc-api.nix)
     (import ./overlays/pg-client-hs.nix)
     (import ./overlays/aeson-ordered.nix)
+    (import ./overlays/packages.nix)
   ];
 }
