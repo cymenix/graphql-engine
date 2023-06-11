@@ -30,6 +30,8 @@ self: super: {
           hasura-base = hsuper.callPackage ../../server/lib/hasura-base { };
           hasura-json-encoding = hsuper.callPackage ../../server/lib/hasura-json-encoding { };
 
+          arrows-extra = hsuper.callPackage ../../server/lib/arrows-extra { };
+
           graphql-server = super.haskell.lib.justStaticExecutables
             ((super.haskell.lib.dontCheck (hsuper.callPackage ../../server {
               hedgehog = hself.hedgehog_1_2;
