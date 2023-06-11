@@ -6,9 +6,11 @@ self: super: {
           # NOTE: avoiding IFD's/automatically generated derivations in favor of cabal2nix generated default.nix
           aeson-ordered = hsuper.callPackage ../../server/lib/aeson-ordered { };
           api-tests = hsuper.callPackage ../../server/lib/api-tests { };
+
           # TODO: some typed hole errors ATM + tests don't compile as extra-source-files are missing
-          dc-api = super.haskell.lib.dontCheck
-            (hsuper.callPackage ../../server/lib/dc-api { });
+          dc-api = super.haskell.lib.dontCheck (hsuper.callPackage ../../server/lib/dc-api { 
+            hasura-extras = hself.hasura-extras;
+          });
           hasura-error-message =
             hsuper.callPackage ../../server/lib/error-message { };
           graphql-parser =
@@ -25,6 +27,7 @@ self: super: {
           hasura-schema-parsers =
             hsuper.callPackage ../../server/lib/schema-parsers { };
           test-harness = hsuper.callPackage ../../server/lib/test-harness { };
+          hasura-extras = hsuper.callPackage ../../server/lib/hasura-extras { };
 
           graphql-server = super.haskell.lib.justStaticExecutables
             ((super.haskell.lib.dontCheck (hsuper.callPackage ../../server {
