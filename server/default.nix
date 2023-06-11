@@ -31,7 +31,8 @@
 , uri-encode, url, utf8-string, uuid, validation, vector
 , vector-instances, wai, warp, websockets, wide-word, witch
 , witherable, wreq, x509, x509-store, x509-system, x509-validation
-, yaml, zlib
+, fold-debounce, ghc-debug-stub, hasura-base, hasura-json-encoding
+, incremental, string-interpolate , yaml, zlib
 }:
 mkDerivation {
   pname = "graphql-engine";
@@ -66,7 +67,8 @@ mkDerivation {
     transformers-base unix unordered-containers uri-encode url
     utf8-string uuid validation vector vector-instances wai warp
     websockets wide-word witch witherable wreq x509 x509-store
-    x509-system x509-validation yaml zlib
+    x509-system x509-validation yaml zlib fold-debounce ghc-debug-stub
+    hasura-base hasura-json-encoding incremental string-interpolate
   ];
   executableHaskellDepends = [
     aeson-pretty base bytestring ekg-core ekg-prometheus hasura-prelude

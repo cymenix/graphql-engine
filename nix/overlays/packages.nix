@@ -27,6 +27,8 @@ self: super: {
           hasura-schema-parsers = super.haskell.lib.dontCheck (hsuper.callPackage ../../server/lib/schema-parsers { });
           test-harness = hsuper.callPackage ../../server/lib/test-harness { };
           hasura-extras = hsuper.callPackage ../../server/lib/hasura-extras { };
+          hasura-base = hsuper.callPackage ../../server/lib/hasura-base { };
+          hasura-json-encoding = hsuper.callPackage ../../server/lib/hasura-json-encoding { };
 
           graphql-server = super.haskell.lib.justStaticExecutables
             ((super.haskell.lib.dontCheck (hsuper.callPackage ../../server {
