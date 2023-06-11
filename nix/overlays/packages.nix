@@ -112,6 +112,29 @@ self: super: {
             rev = "5d30687fd1da66386fc582fb685e4e95c23f9b24";
             sha256 = "0abpki0y8y4cavv3k1sbqa3jc62rjr8bj7l8j313kjhn6v4hhg1c";
           }) { };
+
+          ghc-debug-stub = hsuper.callCabal2nixWithOptions "ghc-debug-stub" (super.fetchFromGitLab {
+            domain = "gitlab.haskell.org";
+            owner = "ghc";
+            repo = "ghc-debug";
+            rev = "6671279c2b4c874291ea67ff67c39f24e1642109";
+            sha256 = "18q9q694rqmj9nv718pwqlkh3ak4g1ra90nlb3k9hw34xbkcl3wf";
+          }) "--subpath stub" { };
+
+          ghc-debug-convention = hsuper.callCabal2nixWithOptions "ghc-debug-convention" (super.fetchFromGitLab {
+            domain = "gitlab.haskell.org";
+            owner = "ghc";
+            repo = "ghc-debug";
+            rev = "6671279c2b4c874291ea67ff67c39f24e1642109";
+            sha256 = "18q9q694rqmj9nv718pwqlkh3ak4g1ra90nlb3k9hw34xbkcl3wf";
+          }) "--subpath convention" { };
+
+          # ghc-debug-stub = hsuper.ghc-debug-stub.override {
+          #   overrides = hself: hsuper: {
+          #     version = "0.5.0.0";
+          #     sha256 = "18q9q694rqmj9nv718pwqlkh3ak4g1ra90nlb3k9hw34xbkcl3wf";
+          #   };
+          # };
         };
       };
     };
