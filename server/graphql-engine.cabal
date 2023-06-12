@@ -156,6 +156,7 @@ flag ghci-load-test-with-lib
 
 common common-all
   ghc-options:
+    -fwhole-archive-hs-libs
     -foptimal-applicative-do
     -- This is just to keep compile-times in check and might be adjusted later (See mono #2610):
     -fmax-simplifier-iterations=2
