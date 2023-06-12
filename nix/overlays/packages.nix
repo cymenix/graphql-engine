@@ -20,6 +20,7 @@ self: super: {
           hasura-json-encoding =
             hsuper.callPackage ../../server/lib/hasura-json-encoding { };
           arrows-extra = hsuper.callPackage ../../server/lib/arrows-extra { };
+          incremental = hsuper.callPackage ../../server/lib/incremental { };
 
           # Hasura packages (tests skipped)
           hasura-schema-parsers = super.haskell.lib.dontCheck
@@ -46,12 +47,13 @@ self: super: {
             })));
 
           # FIXME: for remote repos we have to calculate their default.nix until they get upstreamed/maintained
-          # ekg-core = hsuper.callCabal2nix "ekg-core" (super.fetchFromGitHub {
-          #   owner = "hasura";
-          #   repo = "ekg-core";
-          #   rev = "b0cdc337ca2a52e392d427916ba3e28246b396c0";
-          #   sha256 = "5hdk6OA6fmXFYxt69mwlFDzCd/sxQIm3kc+NreJBy+s=";
-          # }) { };
+          ekg-core = super.haskell.lib.dontCheck
+          (hsuper.callCabal2nix "ekg-core" (super.fetchFromGitHub {
+            owner = "john-rodewald";
+            repo = "ekg-core";
+            rev = "17766e89c568f16abc2c3b2e327a3a77b83b2b0a";
+            sha256 = "17aif4rvvzldxmnkwprq3bab2zca4nw6njii8abzd9f57rp0gglv";
+          }) { });
 
           # https://gutier.io/post/development-fixing-broken-haskell-packages-nixpkgs/
           ekg-prometheus = super.haskell.lib.doJailbreak
@@ -73,12 +75,13 @@ self: super: {
             }) { });
 
           # https://gutier.io/post/development-fixing-broken-haskell-packages-nixpkgs/
-          ekg-json = hsuper.callCabal2nix "ekg-json" (super.fetchFromGitHub {
-            owner = "tracsis";
+          ekg-json = super.haskell.lib.dontCheck
+          (hsuper.callCabal2nix "ekg-json" (super.fetchFromGitHub {
+            owner = "john-rodewald";
             repo = "ekg-json";
-            rev = "504a8f57e4dc69408f1687e775e9fc4ae2c1511d";
-            sha256 = "1jalpf01yxhfwbv9l9garn1g4x0qfwr3jrr25fd58p3v5vhjhyrp";
-          }) { };
+            rev = "9c7ffdc88be0b7aa9f0b3521b3ed6a2de927d24b";
+            sha256 = "0ypyrgkgyjnpnq63y83ld9p0pbrz0h714rv6ivsh6whdvh6q2r3a";
+          }) { });
 
           ci-info = hsuper.callCabal2nix "ci-info" (super.fetchFromGitHub {
             owner = "hasura";
