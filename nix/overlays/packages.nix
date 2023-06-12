@@ -132,13 +132,6 @@ self: super: {
               sha256 = "18q9q694rqmj9nv718pwqlkh3ak4g1ra90nlb3k9hw34xbkcl3wf";
             }) "--subpath convention" { };
 
-          # ghc-debug-stub = hsuper.ghc-debug-stub.override {
-          #   overrides = hself: hsuper: {
-          #     version = "0.5.0.0";
-          #     sha256 = "18q9q694rqmj9nv718pwqlkh3ak4g1ra90nlb3k9hw34xbkcl3wf";
-          #   };
-          # };
-
           # Other broken dependencies
           # openapi3-3.2.2: lens >=4.16.1 && <5.2
           openapi3 = super.haskell.lib.doJailbreak hsuper.openapi3;
