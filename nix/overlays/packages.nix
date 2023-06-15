@@ -134,7 +134,7 @@ self: super: {
 
           # Other broken dependencies
           # openapi3-3.2.2: lens >=4.16.1 && <5.2
-          openapi3 = super.haskell.lib.doJailbreak hsuper.openapi3;
+          openapi3 = super.haskell.lib.doJailbreak (super.haskell.lib.dontCheck hsuper.openapi3);
           servant-openapi3 =
             super.haskell.lib.doJailbreak hsuper.servant-openapi3;
           ghc-heap-view =
