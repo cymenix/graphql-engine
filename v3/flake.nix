@@ -2,7 +2,7 @@
   description = "DDN Engine";
 
   inputs = {
-    nixpkgs.url = github:NixOS/nixpkgs/nixos-unstable;
+    nixpkgs.url = github:NixOS/nixpkgs;
     flake-utils.url = github:numtide/flake-utils;
 
     crane = {
@@ -47,9 +47,9 @@
             drv = self.packages.${localSystem}.default;
             name = "engine";
           };
-          agent = flake-utils.lib.mkApp {
+          custom-connector = flake-utils.lib.mkApp {
             drv = self.packages.${localSystem}.default;
-            name = "engine";
+            name = "custom-connector";
           };
         };
 
@@ -72,7 +72,6 @@
               pkgs.cargo-machete
               pkgs.cargo-nextest
               pkgs.cargo-watch
-              pkgs.rnix-lsp
               rust.rustToolchain
             ];
           };
