@@ -5,6 +5,7 @@ import nixpkgs {
   inherit system;
   config = {
     allowUnfree = true;
+    allowBroken = true;
     permittedInsecurePackages = [
       "nodejs-16.20.0" # until we upgrade our node.js version in .nvmrc
     ];
