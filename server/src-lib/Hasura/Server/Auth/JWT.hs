@@ -1,4 +1,8 @@
 {-# LANGUAGE TemplateHaskell #-}
+-- TODO:
+-- In the use of ‘unregisteredClaims’ (imported from Crypto.JWT):
+--     Deprecated: "use a sub-type"
+{-# OPTIONS_GHC -Wno-deprecations #-}
 
 -- |
 -- Module      : Hasura.Server.Auth.JWT
@@ -63,7 +67,6 @@ import Data.Aeson qualified as J
 import Data.Aeson.Casing qualified as J
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.TH qualified as J
 import Data.ByteArray.Encoding qualified as BAE
 import Data.ByteString.Char8 qualified as BC
 import Data.ByteString.Internal qualified as B
@@ -102,7 +105,7 @@ import Hasura.Server.Utils
 import Hasura.Session (SessionVariable, SessionVariableValue, UserAdminSecret (..), UserInfo, UserRoleBuild (..), mkSessionVariable, mkSessionVariablesHeaders, mkSessionVariablesText, mkUserInfo, sessionVariableToText)
 import Network.HTTP.Client.Transformable qualified as HTTP
 import Network.HTTP.Types as N
-import Network.URI (URI)
+import Network.URI.Extended (URI)
 import Network.Wreq qualified as Wreq
 import Web.Spock.Internal.Cookies qualified as Spock
 
@@ -111,19 +114,35 @@ newtype RawJWT = RawJWT BL.ByteString
 data JWTClaimsFormat
   = JCFJson
   | JCFStringifiedJson
-  deriving (Show, Eq)
+  deriving (Show, Eq, Generic)
 
-$( J.deriveJSON
-     J.defaultOptions
-       { J.sumEncoding = J.ObjectWithSingleField,
-         J.constructorTagModifier = J.snakeCase . drop 3
-       }
-     ''JWTClaimsFormat
- )
+instance J.FromJSON JWTClaimsFormat where
+  parseJSON =
+    J.genericParseJSON
+      J.defaultOptions
+        { J.sumEncoding = J.ObjectWithSingleField,
+          J.constructorTagModifier = J.snakeCase . drop 3
+        }
+
+instance J.ToJSON JWTClaimsFormat where
+  toJSON =
+    J.genericToJSON
+      J.defaultOptions
+        { J.sumEncoding = J.ObjectWithSingleField,
+          J.constructorTagModifier = J.snakeCase . drop 3
+        }
+
+  toEncoding =
+    J.genericToEncoding
+      J.defaultOptions
+        { J.sumEncoding = J.ObjectWithSingleField,
+          J.constructorTagModifier = J.snakeCase . drop 3
+        }
 
 data JWTHeader
   = JHAuthorization
   | JHCookie Text -- cookie name
+  | JHCustomHeader Text -- header name
   deriving (Show, Eq, Generic)
 
 instance Hashable JWTHeader
@@ -134,13 +153,19 @@ instance J.FromJSON JWTHeader where
     if
       | hdrType == "Authorization" -> pure JHAuthorization
       | hdrType == "Cookie" -> JHCookie <$> o J..: "name"
-      | otherwise -> fail "expected 'type' is 'Authorization' or 'Cookie'"
+      | hdrType == "CustomHeader" -> JHCustomHeader <$> o J..: "name"
+      | otherwise -> fail "expected 'type' is 'Authorization' or 'Cookie' or 'CustomHeader'"
 
 instance J.ToJSON JWTHeader where
   toJSON JHAuthorization = J.object ["type" J..= ("Authorization" :: String)]
   toJSON (JHCookie name) =
     J.object
       [ "type" J..= ("Cookie" :: String),
+        "name" J..= name
+      ]
+  toJSON (JHCustomHeader name) =
+    J.object
+      [ "type" J..= ("CustomHeader" :: String),
         "name" J..= name
       ]
 
@@ -304,9 +329,13 @@ data HasuraClaims = HasuraClaims
   { _cmAllowedRoles :: ![RoleName],
     _cmDefaultRole :: !RoleName
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Generic)
 
-$(J.deriveJSON hasuraJSON ''HasuraClaims)
+instance J.FromJSON HasuraClaims where
+  parseJSON = J.genericParseJSON hasuraJSON
+
+instance J.ToJSON HasuraClaims where
+  toJSON = J.genericToJSON hasuraJSON
 
 -- | An action that fetches the JWKs and updates the expiry time and JWKs in the
 -- IORef
@@ -519,6 +548,7 @@ processJwt_ processJwtBytes decodeIssuer fGetHeaderType jwtCtxs headers mUnAuthR
           case BC.words b' of
             ["Bearer", jwt] -> pure jwt
             _ -> throw400 InvalidHeaders "Malformed Authorization header"
+        (JHCustomHeader _, b') -> pure b'
 
       case (StringOrURI <$> jcxIssuer j, decodeIssuer $ RawJWT $ BLC.fromStrict b'') of
         (Nothing, _) -> pure $ Right (j, b'')
@@ -533,13 +563,22 @@ processJwt_ processJwtBytes decodeIssuer fGetHeaderType jwtCtxs headers mUnAuthR
     keyCtxOnAuthTypes :: [JWTCtx] -> HashMap.HashMap AuthTokenLocation [JWTCtx]
     keyCtxOnAuthTypes = HashMap.fromListWith (++) . fmap (expectedHeader &&& pure)
 
-    keyTokensOnAuthTypes :: [HTTP.Header] -> HashMap.HashMap AuthTokenLocation [(AuthTokenLocation, B.ByteString)]
-    keyTokensOnAuthTypes = HashMap.fromListWith (++) . map (fst &&& pure) . concatMap findTokensInHeader
+    getCustomHeaderName :: JWTHeader -> Maybe Text
+    getCustomHeaderName = \case
+      JHCustomHeader headerName -> Just headerName
+      _ -> Nothing
 
-    findTokensInHeader :: Header -> [(AuthTokenLocation, B.ByteString)]
-    findTokensInHeader (key, val)
+    getCustomHeaderNameList = mapMaybe (getCustomHeaderName . fGetHeaderType) jwtCtxs
+
+    keyTokensOnAuthTypes :: [HTTP.Header] -> HashMap.HashMap AuthTokenLocation [(AuthTokenLocation, B.ByteString)]
+    keyTokensOnAuthTypes = HashMap.fromListWith (++) . map (fst &&& pure) . concatMap (findTokensInHeader getCustomHeaderNameList)
+
+    findTokensInHeader :: [Text] -> Header -> [(AuthTokenLocation, B.ByteString)]
+    findTokensInHeader jwtCustomHeaderList (key, val)
       | key == CI.mk "Authorization" = [(JHAuthorization, val)]
       | key == CI.mk "Cookie" = bimap JHCookie T.encodeUtf8 <$> Spock.parseCookies val
+      | key `elem` (map (CI.mk . T.encodeUtf8) jwtCustomHeaderList) =
+          [(JHCustomHeader (T.toLower $ T.decodeUtf8 $ CI.original key), val)]
       | otherwise = []
 
     expectedHeader :: JWTCtx -> AuthTokenLocation
@@ -547,6 +586,7 @@ processJwt_ processJwtBytes decodeIssuer fGetHeaderType jwtCtxs headers mUnAuthR
       case fGetHeaderType jwtCtx of
         JHAuthorization -> JHAuthorization
         JHCookie name -> JHCookie name
+        JHCustomHeader name -> JHCustomHeader (T.toLower name)
 
     withAuthZ authzHeader jwtCtx = do
       authMode <- processJwtBytes jwtCtx $ BL.fromStrict authzHeader
@@ -562,7 +602,7 @@ processJwt_ processJwtBytes decodeIssuer fGetHeaderType jwtCtxs headers mUnAuthR
                     >>= mkRoleName
                     . bsToTxt
 
-            when (requestedRole `notElem` allowedRoles)
+            unless (requestedRole `elem` allowedRoles)
               $ throw400 AccessDenied "Your requested role is not in allowed roles"
             let finalClaims =
                   HashMap.delete defaultRoleClaim . HashMap.delete allowedRolesClaim $ claimsMap

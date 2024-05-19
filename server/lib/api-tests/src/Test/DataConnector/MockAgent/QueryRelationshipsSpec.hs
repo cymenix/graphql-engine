@@ -198,19 +198,19 @@ tests = describe "Object Relationships Tests" $ do
               ( emptyQuery
                   & API.qFields
                   ?~ mkFieldsMap
-                    [ ("Name", API.ColumnField (API.ColumnName "Name") $ API.ScalarType "string"),
+                    [ ("Name", API.ColumnField (API.ColumnName "Name") (API.ScalarType "string") Nothing),
                       ( "Genre",
                         API.RelField
                           ( API.RelationshipField
                               (API.RelationshipName "Genre")
-                              (emptyQuery & API.qFields ?~ mkFieldsMap [("Name", API.ColumnField (API.ColumnName "Name") $ API.ScalarType "string")])
+                              (emptyQuery & API.qFields ?~ mkFieldsMap [("Name", API.ColumnField (API.ColumnName "Name") (API.ScalarType "string") Nothing)])
                           )
                       ),
                       ( "MediaType",
                         API.RelField
                           ( API.RelationshipField
                               (API.RelationshipName "MediaType")
-                              (emptyQuery & API.qFields ?~ mkFieldsMap [("Name", API.ColumnField (API.ColumnName "Name") $ API.ScalarType "string")])
+                              (emptyQuery & API.qFields ?~ mkFieldsMap [("Name", API.ColumnField (API.ColumnName "Name") (API.ScalarType "string") Nothing)])
                           )
                       )
                     ]
@@ -226,18 +226,19 @@ tests = describe "Object Relationships Tests" $ do
                         HashMap.fromList
                           [ ( API.RelationshipName "Genre",
                               API.Relationship
-                                { _rTargetTable = mkTableName "Genre",
+                                { _rTarget = mkTableTarget "Genre",
                                   _rRelationshipType = API.ObjectRelationship,
-                                  _rColumnMapping = HashMap.fromList [(API.ColumnName "GenreId", API.ColumnName "GenreId")]
+                                  _rColumnMapping = API.ColumnPathMapping $ HashMap.fromList [(API.mkColumnSelector $ API.ColumnName "GenreId", API.mkColumnSelector $ API.ColumnName "GenreId")]
                                 }
                             ),
                             ( API.RelationshipName "MediaType",
                               API.Relationship
-                                { _rTargetTable = mkTableName "MediaType",
+                                { _rTarget = mkTableTarget "MediaType",
                                   _rRelationshipType = API.ObjectRelationship,
                                   _rColumnMapping =
-                                    HashMap.fromList
-                                      [(API.ColumnName "MediaTypeId", API.ColumnName "MediaTypeId")]
+                                    API.ColumnPathMapping
+                                      $ HashMap.fromList
+                                        [(API.mkColumnSelector $ API.ColumnName "MediaTypeId", API.mkColumnSelector $ API.ColumnName "MediaTypeId")]
                                 }
                             )
                           ]
@@ -298,7 +299,7 @@ tests = describe "Object Relationships Tests" $ do
               ( emptyQuery
                   & API.qFields
                   ?~ mkFieldsMap
-                    [ ("Name", API.ColumnField (API.ColumnName "Name") $ API.ScalarType "string"),
+                    [ ("Name", API.ColumnField (API.ColumnName "Name") (API.ScalarType "string") Nothing),
                       ( "Album",
                         API.RelField
                           ( API.RelationshipField
@@ -310,7 +311,7 @@ tests = describe "Object Relationships Tests" $ do
                                         API.RelField
                                           ( API.RelationshipField
                                               (API.RelationshipName "Artist")
-                                              (emptyQuery & API.qFields ?~ mkFieldsMap [("Name", API.ColumnField (API.ColumnName "Name") (API.ScalarType "string"))])
+                                              (emptyQuery & API.qFields ?~ mkFieldsMap [("Name", API.ColumnField (API.ColumnName "Name") (API.ScalarType "string") Nothing)])
                                           )
                                       )
                                     ]
@@ -338,8 +339,8 @@ tests = describe "Object Relationships Tests" $ do
                         ]
                     )
                     ( NE.fromList
-                        [ API.OrderByElement [API.RelationshipName "Album", API.RelationshipName "Artist"] (API.OrderByColumn (API.ColumnName "Name")) API.Descending,
-                          API.OrderByElement [] (API.OrderByColumn (API.ColumnName "Name")) API.Ascending
+                        [ API.OrderByElement [API.RelationshipName "Album", API.RelationshipName "Artist"] (API.OrderByColumn (API.mkColumnSelector $ API.ColumnName "Name") Nothing) API.Descending,
+                          API.OrderByElement [] (API.OrderByColumn (API.mkColumnSelector $ API.ColumnName "Name") Nothing) API.Ascending
                         ]
                     )
               )
@@ -352,9 +353,11 @@ tests = describe "Object Relationships Tests" $ do
                         HashMap.fromList
                           [ ( API.RelationshipName "Album",
                               API.Relationship
-                                { _rTargetTable = mkTableName "Album",
+                                { _rTarget = mkTableTarget "Album",
                                   _rRelationshipType = API.ObjectRelationship,
-                                  _rColumnMapping = HashMap.fromList [(API.ColumnName "AlbumId", API.ColumnName "AlbumId")]
+                                  _rColumnMapping =
+                                    API.ColumnPathMapping
+                                      $ HashMap.fromList [(API.mkColumnSelector $ API.ColumnName "AlbumId", API.mkColumnSelector $ API.ColumnName "AlbumId")]
                                 }
                             )
                           ]
@@ -366,9 +369,11 @@ tests = describe "Object Relationships Tests" $ do
                         HashMap.fromList
                           [ ( API.RelationshipName "Artist",
                               API.Relationship
-                                { _rTargetTable = mkTableName "Artist",
+                                { _rTarget = mkTableTarget "Artist",
                                   _rRelationshipType = API.ObjectRelationship,
-                                  _rColumnMapping = HashMap.fromList [(API.ColumnName "ArtistId", API.ColumnName "ArtistId")]
+                                  _rColumnMapping =
+                                    API.ColumnPathMapping
+                                      $ HashMap.fromList [(API.mkColumnSelector $ API.ColumnName "ArtistId", API.mkColumnSelector $ API.ColumnName "ArtistId")]
                                 }
                             )
                           ]
@@ -409,7 +414,7 @@ tests = describe "Object Relationships Tests" $ do
               (mkTableName "Employee")
               ( emptyQuery
                   & API.qFields
-                  ?~ mkFieldsMap [("EmployeeId", API.ColumnField (API.ColumnName "EmployeeId") $ API.ScalarType "number")]
+                  ?~ mkFieldsMap [("EmployeeId", API.ColumnField (API.ColumnName "EmployeeId") (API.ScalarType "number") Nothing)]
                     & API.qLimit
                   ?~ 1
                     & API.qWhere
@@ -417,8 +422,8 @@ tests = describe "Object Relationships Tests" $ do
                     (API.RelatedTable $ API.RelationshipName "SupportRepForCustomers")
                     ( API.ApplyBinaryComparisonOperator
                         API.Equal
-                        (API.ComparisonColumn API.CurrentTable (API.ColumnName "Country") $ API.ScalarType "string")
-                        (API.AnotherColumnComparison (API.ComparisonColumn API.QueryTable (API.ColumnName "Country") $ API.ScalarType "string"))
+                        (API.ComparisonColumn API.CurrentTable (API.mkColumnSelector $ API.ColumnName "Country") (API.ScalarType "string") Nothing)
+                        (API.AnotherColumnComparison (API.ComparisonColumn API.QueryTable (API.mkColumnSelector $ API.ColumnName "Country") (API.ScalarType "string") Nothing))
                     )
                     & API.qOrderBy
                   ?~ API.OrderBy
@@ -429,8 +434,8 @@ tests = describe "Object Relationships Tests" $ do
                                   $ API.Exists (API.RelatedTable $ API.RelationshipName "SupportRep")
                                   $ API.ApplyBinaryComparisonOperator
                                     API.Equal
-                                    (API.ComparisonColumn API.CurrentTable (API.ColumnName "Country") $ API.ScalarType "string")
-                                    (API.AnotherColumnComparison (API.ComparisonColumn API.QueryTable (API.ColumnName "Country") $ API.ScalarType "string"))
+                                    (API.ComparisonColumn API.CurrentTable (API.mkColumnSelector $ API.ColumnName "Country") (API.ScalarType "string") Nothing)
+                                    (API.AnotherColumnComparison (API.ComparisonColumn API.QueryTable (API.mkColumnSelector $ API.ColumnName "Country") (API.ScalarType "string") Nothing))
                               )
                               mempty
                           )
@@ -447,9 +452,9 @@ tests = describe "Object Relationships Tests" $ do
                         HashMap.fromList
                           [ ( API.RelationshipName "SupportRep",
                               API.Relationship
-                                { _rTargetTable = mkTableName "Employee",
+                                { _rTarget = mkTableTarget "Employee",
                                   _rRelationshipType = API.ObjectRelationship,
-                                  _rColumnMapping = HashMap.fromList [(API.ColumnName "SupportRepId", API.ColumnName "EmployeeId")]
+                                  _rColumnMapping = API.ColumnPathMapping $ HashMap.fromList [(API.mkColumnSelector $ API.ColumnName "SupportRepId", API.mkColumnSelector $ API.ColumnName "EmployeeId")]
                                 }
                             )
                           ]
@@ -461,9 +466,9 @@ tests = describe "Object Relationships Tests" $ do
                         HashMap.fromList
                           [ ( API.RelationshipName "SupportRepForCustomers",
                               API.Relationship
-                                { _rTargetTable = mkTableName "Customer",
+                                { _rTarget = mkTableTarget "Customer",
                                   _rRelationshipType = API.ArrayRelationship,
-                                  _rColumnMapping = HashMap.fromList [(API.ColumnName "EmployeeId", API.ColumnName "SupportRepId")]
+                                  _rColumnMapping = API.ColumnPathMapping $ HashMap.fromList [(API.mkColumnSelector $ API.ColumnName "EmployeeId", API.mkColumnSelector $ API.ColumnName "SupportRepId")]
                                 }
                             )
                           ]

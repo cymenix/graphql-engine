@@ -22,6 +22,7 @@ const formDataMockResult = {
     'Series_title_4',
     'Series_title_5',
   ],
+  computed_fields: [],
 };
 
 test('returns correctly formatted formData', () => {
@@ -60,6 +61,7 @@ const defaultValuesMockResult: ReturnType<typeof createDefaultValues> = {
     { name: 'like', value: '_like', defaultValue: '%%' },
     { name: 'not like', value: '_nlike', defaultValue: '%%' },
   ],
+  comment: '',
   filter: { _not: { Data_value: { _eq: 1337 } } },
   rowCount: '0',
   aggregationEnabled: false,
@@ -78,6 +80,7 @@ const defaultValuesMockResult: ReturnType<typeof createDefaultValues> = {
   },
   query_root_fields: null,
   subscription_root_fields: null,
+  computed_fields: {},
 };
 
 test('use default values returns values correctly', () => {

@@ -8,8 +8,10 @@ module Hasura.RQL.DDL.Schema.Cache.Config
   )
 where
 
+import Hasura.GraphQL.Schema.Common (SchemaSampledFeatureFlags)
 import Hasura.Logging (Hasura, Logger)
 import Hasura.Prelude
+import Hasura.RQL.Types.BackendType
 import Hasura.RQL.Types.Common (SQLGenCtx)
 import Hasura.RQL.Types.Metadata (MetadataDefaults)
 import Hasura.RQL.Types.NamingCase (NamingCase)
@@ -35,7 +37,7 @@ data CacheStaticConfig = CacheStaticConfig
     _cscLogger :: Logger Hasura,
     -- | Native queries can be enabled or disabled on the fly via a feature
     -- flag, however we only recognise a change on a restart
-    _cscAreNativeQueriesEnabled :: Bool,
+    _cscAreNativeQueriesEnabled :: BackendType -> Bool,
     -- | Stored procedures can be enabled or disabled on the fly via a feature
     -- flag, however we only recognise a change on a restart
     _cscAreStoredProceduresEnabled :: Bool
@@ -72,6 +74,8 @@ data CacheDynamicConfig = CacheDynamicConfig
     _cdcExperimentalFeatures :: HashSet ExperimentalFeature,
     _cdcDefaultNamingConvention :: NamingCase,
     _cdcMetadataDefaults :: MetadataDefaults,
-    _cdcApolloFederationStatus :: ApolloFederationStatus
+    _cdcApolloFederationStatus :: ApolloFederationStatus,
+    _cdcCloseWebsocketsOnMetadataChangeStatus :: CloseWebsocketsOnMetadataChangeStatus,
+    _cdcSchemaSampledFeatureFlags :: SchemaSampledFeatureFlags
   }
   deriving (Eq)

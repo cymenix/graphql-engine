@@ -81,6 +81,12 @@ EOL
 exit 1
 }
 
+# See: TODO
+cabal --version | grep -q ' 3\.10' || { 
+    echo_error "Please use cabal 3.10, as cabal broke 'import' and we can't make it compatible"
+    exit 1
+}
+
 # The default configuration this script expects. May be overridden depending on
 # flags passed to subcommands, or this can be edited for one-off tests:
 CABAL_PROJECT_FILE=cabal/dev-sh.project
@@ -101,9 +107,10 @@ case "${1-}" in
     if [ "$EDITION_NAME" = "graphql-engine-pro" ];then
       EDITION_ABBREV=ee
       if [ -z "${HASURA_GRAPHQL_EE_LICENSE_KEY-}" ]; then
-          echo_error "You need to have the HASURA_GRAPHQL_EE_LICENSE_KEY environment variable defined." 
-          echo_error "Ask a pro developer for the dev key."
-          exit 1
+          echo_warn "You don't have the HASURA_GRAPHQL_EE_LICENSE_KEY environment variable defined." 
+          echo_warn "Ask a pro developer for the dev key."
+          echo_warn "    Or: Press enter to continue with the pro binary in non-pro mode [will proceed in 15s]"
+          read -r -t15 || true
       fi
       # This is required for pro with EE license available:
       if [ -z "${HASURA_GRAPHQL_ADMIN_SECRET-}" ]; then
@@ -544,7 +551,7 @@ if [ "$MODE" = "graphql-engine" ] || [ "$MODE" = "graphql-engine-pro" ]; then
   export HASURA_GRAPHQL_DATABASE_URL=${HASURA_GRAPHQL_DATABASE_URL-$PG_DB_URL}
   export HASURA_GRAPHQL_SERVER_PORT=${HASURA_GRAPHQL_SERVER_PORT-8181}
   # Add 'developer' to the default list, for more visiblility:
-  export HASURA_GRAPHQL_ENABLED_APIS=metadata,graphql,pgdump,config,developer
+  export HASURA_GRAPHQL_ENABLED_APIS=metadata,graphql,pgdump,config,developer,metrics
 
   echo_pretty "We will connect to postgres at '$HASURA_GRAPHQL_DATABASE_URL'"
   echo_pretty "If you haven't overridden HASURA_GRAPHQL_DATABASE_URL, you can"

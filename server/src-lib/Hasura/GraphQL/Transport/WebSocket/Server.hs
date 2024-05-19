@@ -24,6 +24,7 @@ module Hasura.GraphQL.Transport.WebSocket.Server
     sendMsgAndCloseConn,
     createServerApp,
     createWSServer,
+    closeAllConnectionsWithReason,
     getData,
     getRawWebSocketConnection,
     getWSId,
@@ -71,9 +72,11 @@ import Hasura.Server.Auth (AuthMode, compareAuthMode)
 import Hasura.Server.Cors (CorsPolicy)
 import Hasura.Server.Init.Config (AllowListStatus (..), WSConnectionInitTimeout (..))
 import Hasura.Server.Prometheus
-  ( PrometheusMetrics (..),
+  ( DynamicGraphqlOperationLabel (..),
+    PrometheusMetrics (..),
+    recordMetricWithLabel,
   )
-import Hasura.Server.Types (ExperimentalFeature (..))
+import Hasura.Server.Types (ExperimentalFeature (..), MonadGetPolicies (runGetPrometheusMetricsGranularity))
 import ListT qualified
 import Network.Wai.Extended (IpAddress)
 import Network.Wai.Handler.Warp qualified as Warp
@@ -82,6 +85,7 @@ import Refined (unrefine)
 import StmContainers.Map qualified as STMMap
 import System.IO.Error qualified as E
 import System.Metrics.Prometheus.Counter qualified as Prometheus.Counter
+import System.Metrics.Prometheus.CounterVector qualified as CounterVector
 import System.Metrics.Prometheus.Histogram qualified as Prometheus.Histogram
 import System.TimeManager qualified as TM
 
@@ -278,6 +282,22 @@ closeAllWith ::
 closeAllWith closer msg conns =
   void $ A.mapConcurrently (closer msg . snd) conns
 
+closeAllConnectionsWithReason ::
+  WSServer a ->
+  String ->
+  BL.ByteString ->
+  (SecuritySensitiveUserConfig -> SecuritySensitiveUserConfig) ->
+  IO ()
+closeAllConnectionsWithReason (WSServer (L.Logger writeLog) userConfRef serverStatus) logMsg reason updateConf = do
+  writeLog
+    $ WSReaperThreadLog
+    $ fromString
+    $ logMsg
+  conns <- STM.atomically $ do
+    STM.modifyTVar' userConfRef updateConf
+    flushConnMap serverStatus
+  closeAllWith (flip forceConnReconnect) reason conns
+
 -- | Resets the current connections map to an empty one if the server is
 -- running and returns the list of connections that were in the map
 -- before flushing it.
@@ -325,10 +345,12 @@ data WSActions a = WSActions
 
 data WSErrorMessage = ClientMessageParseFailed | ConnInitFailed
 
-mkWSServerErrorCode :: WSErrorMessage -> ConnErrMsg -> ServerErrorCode
-mkWSServerErrorCode errorMessage connErrMsg = case errorMessage of
+mkWSServerErrorCode :: WSSubProtocol -> WSErrorMessage -> ConnErrMsg -> ServerErrorCode
+mkWSServerErrorCode subProtocol errorMessage connErrMsg = case errorMessage of
   ClientMessageParseFailed -> (GenericError4400 $ ("Parsing client message failed: ") <> (T.unpack . unConnErrMsg $ connErrMsg))
-  ConnInitFailed -> (GenericError4400 $ ("Connection initialization failed: ") <> (T.unpack . unConnErrMsg $ connErrMsg))
+  ConnInitFailed -> case subProtocol of
+    Apollo -> (GenericError4400 $ ("Connection initialization failed: ") <> (T.unpack . unConnErrMsg $ connErrMsg))
+    GraphQLWS -> Forbidden4403
 
 type OnConnH m a = WSId -> WS.RequestHead -> IpAddress -> WSActions a -> m (Either WS.RejectRequest (AcceptWith a))
 
@@ -354,7 +376,7 @@ data WSHandlers m a = WSHandlers
 -- stringify big query numeric, experimental features and invalidates/closes all
 -- connections if there are any changes.
 websocketConnectionReaper :: IO (AuthMode, AllowListStatus, CorsPolicy, SQLGenCtx, Set.HashSet ExperimentalFeature, NamingCase) -> IO SchemaCache -> WSServer a -> IO Void
-websocketConnectionReaper getLatestConfig getSchemaCache (WSServer (L.Logger writeLog) userConfRef serverStatus) =
+websocketConnectionReaper getLatestConfig getSchemaCache ws@(WSServer _ userConfRef _) =
   forever $ do
     (currAuthMode, currEnableAllowlist, currCorsPolicy, currSqlGenCtx, currExperimentalFeatures, currDefaultNamingCase) <- getLatestConfig
     currAllowlist <- scAllowlist <$> getSchemaCache
@@ -370,21 +392,6 @@ websocketConnectionReaper getLatestConfig getSchemaCache (WSServer (L.Logger wri
       (currDefaultNamingCase, prevDefaultNamingCase)
     sleep $ seconds 1
   where
-    closeAllConnectionsWithReason ::
-      String ->
-      BL.ByteString ->
-      (SecuritySensitiveUserConfig -> SecuritySensitiveUserConfig) ->
-      IO ()
-    closeAllConnectionsWithReason logMsg reason updateConf = do
-      writeLog
-        $ WSReaperThreadLog
-        $ fromString
-        $ logMsg
-      conns <- STM.atomically $ do
-        STM.modifyTVar' userConfRef updateConf
-        flushConnMap serverStatus
-      closeAllWith (flip forceConnReconnect) reason conns
-
     -- Close all connections based on -
     -- if CorsPolicy changed -> close
     -- if AuthMode changed -> close
@@ -412,19 +419,21 @@ websocketConnectionReaper getLatestConfig getSchemaCache (WSServer (L.Logger wri
             -- The bigqueryStringNumericInput of SQLGenCtx is built from the experimentalFeature, hence no need to check for this field
             -- in experimentalFeatures again.
             hasBigqueryStringNumericInputChanged = bigqueryStringNumericInput currSqlGenCtx /= bigqueryStringNumericInput prevSqlGenCtx
-            hasHideAggregationPredicatesChanged = (EFHideAggregationPredicates `elem` currExperimentalFeatures) && (EFHideAggregationPredicates `elem` prevExperimentalFeatures)
-            hasHideStreamFieldsChanged = (EFHideStreamFields `elem` currExperimentalFeatures) && (EFHideStreamFields `elem` prevExperimentalFeatures)
+            hasHideAggregationPredicatesChanged = (EFHideAggregationPredicates `elem` currExperimentalFeatures) /= (EFHideAggregationPredicates `elem` prevExperimentalFeatures)
+            hasHideStreamFieldsChanged = (EFHideStreamFields `elem` currExperimentalFeatures) /= (EFHideStreamFields `elem` prevExperimentalFeatures)
             hasDefaultNamingCaseChanged = hasNamingConventionChanged (prevExperimentalFeatures, prevDefaultNamingCase) (currExperimentalFeatures, currDefaultNamingCase)
         if
           -- if CORS policy has changed, close all connections
           | hasCorsPolicyChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the cors policy changed"
                 "cors policy changed"
                 (\conf -> conf {ssucCorsPolicy = currCorsPolicy})
           -- if any auth config has changed, close all connections
           | hasAuthModeChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the auth mode changed"
                 "auth mode changed"
                 (\conf -> conf {ssucAuthMode = currAuthMode})
@@ -434,6 +443,7 @@ websocketConnectionReaper getLatestConfig getSchemaCache (WSServer (L.Logger wri
           -- connections.
           | hasAllowlistEnabled ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as allow list is enabled"
                 "allow list enabled"
                 (\conf -> conf {ssucEnableAllowlist = currEnableAllowlist})
@@ -441,49 +451,56 @@ websocketConnectionReaper getLatestConfig getSchemaCache (WSServer (L.Logger wri
           -- allowlist, we need to close all the connections.
           | hasAllowlistUpdated ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the allow list has been updated"
                 "allow list updated"
                 (\conf -> conf {ssucAllowlist = currAllowlist})
           -- if HASURA_GRAPHQL_STRINGIFY_NUMERIC_TYPES has changed, close all connections
           | hasStringifyNumChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the HASURA_GRAPHQL_STRINGIFY_NUMERIC_TYPES setting changed"
                 "HASURA_GRAPHQL_STRINGIFY_NUMERIC_TYPES env var changed"
                 (\conf -> conf {ssucSQLGenCtx = currSqlGenCtx})
           -- if HASURA_GRAPHQL_V1_BOOLEAN_NULL_COLLAPSE has changed, close all connections
           | hasDangerousBooleanCollapseChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the HASURA_GRAPHQL_V1_BOOLEAN_NULL_COLLAPSE setting changed"
                 "HASURA_GRAPHQL_V1_BOOLEAN_NULL_COLLAPSE env var changed"
                 (\conf -> conf {ssucSQLGenCtx = currSqlGenCtx})
           -- if 'bigquery_string_numeric_input' option added/removed from experimental features, close all connections
           | hasBigqueryStringNumericInputChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the 'bigquery_string_numeric_input' option has been added/removed from HASURA_GRAPHQL_EXPERIMENTAL_FEATURES"
                 "'bigquery_string_numeric_input' removed/added in HASURA_GRAPHQL_EXPERIMENTAL_FEATURES env var"
                 (\conf -> conf {ssucSQLGenCtx = currSqlGenCtx})
           -- if 'hide_aggregation_predicates' option added/removed from experimental features, close all connections
           | hasHideAggregationPredicatesChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the 'hide-aggregation-predicates' option has been added/removed from HASURA_GRAPHQL_EXPERIMENTAL_FEATURES"
                 "'hide-aggregation-predicates' removed/added in HASURA_GRAPHQL_EXPERIMENTAL_FEATURES env var"
                 (\conf -> conf {ssucExperimentalFeatures = currExperimentalFeatures})
           -- if 'hide_stream_fields' option added/removed from experimental features, close all connections
           | hasHideStreamFieldsChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the 'hide-stream-fields' option has been added/removed from HASURA_GRAPHQL_EXPERIMENTAL_FEATURES"
                 "'hide-stream-fields' removed/added in HASURA_GRAPHQL_EXPERIMENTAL_FEATURES env var"
                 (\conf -> conf {ssucExperimentalFeatures = currExperimentalFeatures})
           -- if naming convention has been changed, close all connections
           | hasDefaultNamingCaseChanged ->
               closeAllConnectionsWithReason
+                ws
                 "closing all websocket connections as the 'naming_convention' option has been added/removed from HASURA_GRAPHQL_EXPERIMENTAL_FEATURES and the HASURA_GRAPHQL_DEFAULT_NAMING_CONVENTION has changed"
                 "naming convention has been changed"
                 (\conf -> conf {ssucExperimentalFeatures = currExperimentalFeatures, ssucDefaultNamingCase = currDefaultNamingCase})
           | otherwise -> pure ()
 
 createServerApp ::
-  (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m), MonadWSLog m) =>
+  (MonadIO m, MC.MonadBaseControl IO m, LA.Forall (LA.Pure m), MonadWSLog m, MonadGetPolicies m) =>
   IO MetricsConfig ->
   WSConnectionInitTimeout ->
   WSServer a ->
@@ -585,52 +602,67 @@ createServerApp getMetricsConfig wsConnInitTimeout (WSServer logger@(L.Logger wr
             forceConnReconnect wsConn "shutting server down"
             closeHandler wsConn
           AcceptingConns _ -> do
-            let rcv = forever $ do
-                  shouldCaptureVariables <- liftIO $ _mcAnalyzeQueryVariables <$> getMetricsConfig
-                  -- Process all messages serially (important!), in a separate thread:
-                  msg <-
+            let rcv = do
+                  labelMe "WebSocket rcv"
+                  forever $ do
+                    shouldCaptureVariables <- liftIO $ _mcAnalyzeQueryVariables <$> getMetricsConfig
+                    -- Process all messages serially (important!), in a separate thread:
+                    msg <-
+                      liftIO
+                        $
+                        -- Re-throw "receiveloop: resource vanished (Connection reset by peer)" :
+                        --   https://github.com/yesodweb/wai/blob/master/warp/Network/Wai/Handler/Warp/Recv.hs#L112
+                        -- as WS exception signaling cleanup below. It's not clear why exactly this gets
+                        -- raised occasionally; I suspect an equivalent handler is missing from WS itself.
+                        -- Regardless this should be safe:
+                        handleJust (guard . E.isResourceVanishedError) (\() -> throw WS.ConnectionClosed)
+                        $ WS.receiveData conn
+                    let messageLength = BL.length msg
+                        censoredMessage =
+                          MessageDetails
+                            (SB.fromLBS (if shouldCaptureVariables then msg else "<censored>"))
+                            messageLength
                     liftIO
-                      $
-                      -- Re-throw "receiveloop: resource vanished (Connection reset by peer)" :
-                      --   https://github.com/yesodweb/wai/blob/master/warp/Network/Wai/Handler/Warp/Recv.hs#L112
-                      -- as WS exception signaling cleanup below. It's not clear why exactly this gets
-                      -- raised occasionally; I suspect an equivalent handler is missing from WS itself.
-                      -- Regardless this should be safe:
-                      handleJust (guard . E.isResourceVanishedError) (\() -> throw WS.ConnectionClosed)
-                      $ WS.receiveData conn
-                  let messageLength = BL.length msg
-                      censoredMessage =
-                        MessageDetails
-                          (SB.fromLBS (if shouldCaptureVariables then msg else "<censored>"))
-                          messageLength
-                  liftIO
-                    $ Prometheus.Counter.add
-                      (pmWebSocketBytesReceived prometheusMetrics)
-                      messageLength
-                  logWSLog logger $ WSLog wsId (EMessageReceived censoredMessage) Nothing
-                  messageHandler wsConn msg subProtocol
+                      $ Prometheus.Counter.add
+                        (pmWebSocketBytesReceived prometheusMetrics)
+                        messageLength
+                    logWSLog logger $ WSLog wsId (EMessageReceived censoredMessage) Nothing
+                    messageHandler wsConn msg subProtocol
 
-            let send = forever $ do
-                  WSQueueResponse msg wsInfo wsTimer <- liftIO $ STM.atomically $ STM.readTQueue sendQ
-                  liftIO $ WS.sendTextData conn msg
-                  messageQueueTime <- liftIO $ realToFrac <$> wsTimer
-                  let messageLength = BL.length msg
-                      messageDetails = MessageDetails (SB.fromLBS msg) messageLength
-                  liftIO $ do
-                    Prometheus.Counter.add
-                      (pmWebSocketBytesSent prometheusMetrics)
-                      messageLength
-                    Prometheus.Histogram.observe
-                      (pmWebsocketMsgQueueTimeSeconds prometheusMetrics)
-                      messageQueueTime
-                  logWSLog logger $ WSLog wsId (EMessageSent messageDetails) wsInfo
+            let send = do
+                  labelMe "WebSocket send"
+                  forever $ do
+                    WSQueueResponse msg wsInfo wsTimer <- liftIO $ STM.atomically $ STM.readTQueue sendQ
+                    messageQueueTime <- liftIO $ realToFrac <$> wsTimer
+                    (messageWriteTime, _) <- liftIO $ withElapsedTime $ WS.sendTextData conn msg
+                    let messageLength = BL.length msg
+                        messageDetails = MessageDetails (SB.fromLBS msg) messageLength
+                        parameterizedQueryHash = wsInfo >>= _wseiParameterizedQueryHash
+                        operationName = wsInfo >>= _wseiOperationName
+                        promMetricGranularLabel = DynamicGraphqlOperationLabel parameterizedQueryHash operationName
+                        promMetricLabel = DynamicGraphqlOperationLabel Nothing Nothing
+                        websocketBytesSentMetric = pmWebSocketBytesSent prometheusMetrics
+                    granularPrometheusMetricsState <- runGetPrometheusMetricsGranularity
+                    liftIO $ do
+                      recordMetricWithLabel
+                        granularPrometheusMetricsState
+                        True
+                        (CounterVector.add websocketBytesSentMetric promMetricGranularLabel messageLength)
+                        (CounterVector.add websocketBytesSentMetric promMetricLabel messageLength)
+                      Prometheus.Histogram.observe
+                        (pmWebsocketMsgQueueTimeSeconds prometheusMetrics)
+                        messageQueueTime
+                      Prometheus.Histogram.observe
+                        (pmWebsocketMsgWriteTimeSeconds prometheusMetrics)
+                        (realToFrac messageWriteTime)
+                    logWSLog logger $ WSLog wsId (EMessageSent messageDetails) wsInfo
 
             -- withAsync lets us be very sure that if e.g. an async exception is raised while we're
             -- forking that the threads we launched will be cleaned up. See also below.
             LA.withAsync rcv $ \rcvRef -> do
               LA.withAsync send $ \sendRef -> do
-                LA.withAsync (liftIO $ keepAlive wsConn) $ \keepAliveRef -> do
-                  LA.withAsync (liftIO $ onJwtExpiry wsConn) $ \onJwtExpiryRef -> do
+                LA.withAsync (liftIO $ labelMe "WebSocket keepAlive" >> keepAlive wsConn) $ \keepAliveRef -> do
+                  LA.withAsync (liftIO $ labelMe "WebSocket onJwtExpiry" >> onJwtExpiry wsConn) $ \onJwtExpiryRef -> do
                     -- once connection is accepted, check the status of the timer, and if it's expired, close the connection for `graphql-ws`
                     timeoutStatus <- liftIO $ getWSTimerState wsConnInitTimer
                     when (timeoutStatus == Done && subProtocol == GraphQLWS)

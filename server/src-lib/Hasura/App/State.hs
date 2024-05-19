@@ -1,4 +1,5 @@
 {-# LANGUAGE Arrows #-}
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Hasura.App.State
   ( -- * application state
@@ -34,10 +35,12 @@ import Hasura.Eventing.Common (LockedEventsCtx)
 import Hasura.Eventing.EventTrigger
 import Hasura.GraphQL.Execute.Subscription.Options
 import Hasura.GraphQL.Execute.Subscription.State qualified as ES
+import Hasura.GraphQL.Schema.Common (SchemaSampledFeatureFlags, sampleFeatureFlags)
 import Hasura.Incremental qualified as Inc
 import Hasura.Logging qualified as L
 import Hasura.Prelude
 import Hasura.RQL.DDL.Schema.Cache.Config
+import Hasura.RQL.Types.BackendType
 import Hasura.RQL.Types.Common
 import Hasura.RQL.Types.Metadata
 import Hasura.RQL.Types.NamingCase
@@ -95,7 +98,11 @@ Hasura Application State can be divided into two parts:
 data RebuildableAppContext impl = RebuildableAppContext
   { lastBuiltAppContext :: AppContext,
     _racInvalidationMap :: InvalidationKeys,
-    _racRebuild :: Inc.Rule (ReaderT (L.Logger L.Hasura, HTTP.Manager) (ExceptT QErr IO)) (ServeOptions impl, E.Environment, InvalidationKeys) AppContext
+    _racRebuild ::
+      Inc.Rule
+        (ReaderT (L.Logger L.Hasura, HTTP.Manager) (ExceptT QErr IO))
+        (ServeOptions impl, E.Environment, InvalidationKeys, CheckFeatureFlag)
+        AppContext
   }
 
 -- | Represents the Read-Only Hasura State, these fields are immutable and the state
@@ -134,7 +141,12 @@ data AppEnv = AppEnv
     -- to do it for the Enterprise version.
     appEnvSchemaPollInterval :: OptionalInterval,
     appEnvCheckFeatureFlag :: CheckFeatureFlag,
-    appEnvLicenseKeyCache :: Maybe (CredentialCache AgentLicenseKey)
+    appEnvLicenseKeyCache :: Maybe (CredentialCache AgentLicenseKey),
+    appEnvMaxTotalHeaderLength :: Int,
+    appEnvTriggersErrorLogLevelStatus :: TriggersErrorLogLevelStatus,
+    appEnvAsyncActionsFetchBatchSize :: Int,
+    appEnvPersistedQueries :: PersistedQueriesState,
+    appEnvPersistedQueriesTtl :: Int
   }
 
 -- | Represents the Dynamic Hasura State, these field are mutable and can be changed
@@ -158,7 +170,11 @@ data AppContext = AppContext
     acEnableTelemetry :: TelemetryStatus,
     acEventEngineCtx :: EventEngineCtx,
     acAsyncActionsFetchInterval :: OptionalInterval,
-    acApolloFederationStatus :: ApolloFederationStatus
+    acApolloFederationStatus :: ApolloFederationStatus,
+    acCloseWebsocketsOnMetadataChangeStatus :: CloseWebsocketsOnMetadataChangeStatus,
+    acSchemaSampledFeatureFlags :: SchemaSampledFeatureFlags,
+    acRemoteSchemaResponsePriority :: RemoteSchemaResponsePriority,
+    acHeaderPrecedence :: HeaderPrecedence
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
@@ -204,9 +220,16 @@ initInvalidationKeys = InvalidationKeys
 
 -- | Function to build the 'AppContext' (given the 'ServeOptions') for the first
 -- time
-buildRebuildableAppContext :: (L.Logger L.Hasura, HTTP.Manager) -> ServeOptions impl -> E.Environment -> ExceptT QErr IO (RebuildableAppContext impl)
-buildRebuildableAppContext readerContext serveOptions env = do
-  result <- flip runReaderT readerContext $ Inc.build (buildAppContextRule) (serveOptions, env, initInvalidationKeys)
+buildRebuildableAppContext ::
+  ( L.Logger L.Hasura,
+    HTTP.Manager
+  ) ->
+  ServeOptions impl ->
+  CheckFeatureFlag ->
+  E.Environment ->
+  ExceptT QErr IO (RebuildableAppContext impl)
+buildRebuildableAppContext readerContext serveOptions checkFeatureFlag env = do
+  result <- flip runReaderT readerContext $ Inc.build (buildAppContextRule) (serveOptions, env, initInvalidationKeys, checkFeatureFlag)
   let !appContext = Inc.result result
   let !rebuildableAppContext = RebuildableAppContext appContext initInvalidationKeys (Inc.rebuildRule result)
   pure rebuildableAppContext
@@ -218,16 +241,17 @@ rebuildRebuildableAppContext ::
   (L.Logger L.Hasura, HTTP.Manager) ->
   RebuildableAppContext impl ->
   ServeOptions impl ->
+  CheckFeatureFlag ->
   E.Environment ->
   m (RebuildableAppContext impl)
-rebuildRebuildableAppContext readerCtx (RebuildableAppContext _ _ rule) serveOptions env = do
+rebuildRebuildableAppContext readerCtx (RebuildableAppContext _ _ rule) serveOptions checkFeatureFlag env = do
   let newInvalidationKeys = InvalidationKeys
   result <-
     liftEitherM
       $ liftIO
       $ runExceptT
       $ flip runReaderT readerCtx
-      $ Inc.build rule (serveOptions, env, newInvalidationKeys)
+      $ Inc.build rule (serveOptions, env, newInvalidationKeys, checkFeatureFlag)
   let appContext = Inc.result result
       !newCtx = RebuildableAppContext appContext newInvalidationKeys (Inc.rebuildRule result)
   pure newCtx
@@ -241,10 +265,11 @@ buildAppContextRule ::
     MonadError QErr m,
     MonadReader (L.Logger L.Hasura, HTTP.Manager) m
   ) =>
-  (ServeOptions impl, E.Environment, InvalidationKeys) `arr` AppContext
-buildAppContextRule = proc (ServeOptions {..}, env, _keys) -> do
+  (ServeOptions impl, E.Environment, InvalidationKeys, CheckFeatureFlag) `arr` AppContext
+buildAppContextRule = proc (ServeOptions {..}, env, _keys, checkFeatureFlag) -> do
+  schemaSampledFeatureFlags <- arrM (liftIO . sampleFeatureFlags) -< checkFeatureFlag
   authMode <- buildAuthMode -< (soAdminSecret, soAuthHook, soJwtSecret, soUnAuthRole)
-  sqlGenCtx <- buildSqlGenCtx -< (soExperimentalFeatures, soStringifyNum, soDangerousBooleanCollapse)
+  let sqlGenCtx = initSQLGenCtx soExperimentalFeatures soStringifyNum soDangerousBooleanCollapse soBackwardsCompatibleNullInNonNullableVariables soRemoteNullForwardingPolicy
   responseInternalErrorsConfig <- buildResponseInternalErrorsConfig -< (soAdminInternalErrors, soDevMode)
   eventEngineCtx <- buildEventEngineCtx -< (soEventsHttpPoolSize, soEventsFetchInterval, soEventsFetchBatchSize)
   returnA
@@ -268,13 +293,13 @@ buildAppContextRule = proc (ServeOptions {..}, env, _keys) -> do
           acEnableTelemetry = soEnableTelemetry,
           acEventEngineCtx = eventEngineCtx,
           acAsyncActionsFetchInterval = soAsyncActionsFetchInterval,
-          acApolloFederationStatus = soApolloFederationStatus
+          acApolloFederationStatus = soApolloFederationStatus,
+          acCloseWebsocketsOnMetadataChangeStatus = soCloseWebsocketsOnMetadataChangeStatus,
+          acSchemaSampledFeatureFlags = schemaSampledFeatureFlags,
+          acRemoteSchemaResponsePriority = soRemoteSchemaResponsePriority,
+          acHeaderPrecedence = soHeaderPrecedence
         }
   where
-    buildSqlGenCtx = Inc.cache proc (experimentalFeatures, stringifyNum, dangerousBooleanCollapse) -> do
-      let sqlGenCtx = initSQLGenCtx experimentalFeatures stringifyNum dangerousBooleanCollapse
-      returnA -< sqlGenCtx
-
     buildEventEngineCtx = Inc.cache proc (httpPoolSize, fetchInterval, fetchBatchSize) -> do
       eventEngineCtx <- bindA -< initEventEngineCtx httpPoolSize fetchInterval fetchBatchSize
       returnA -< eventEngineCtx
@@ -309,8 +334,14 @@ buildAppContextRule = proc (ServeOptions {..}, env, _keys) -> do
 --------------------------------------------------------------------------------
 -- subsets
 
-initSQLGenCtx :: HashSet ExperimentalFeature -> Options.StringifyNumbers -> Options.DangerouslyCollapseBooleans -> SQLGenCtx
-initSQLGenCtx experimentalFeatures stringifyNum dangerousBooleanCollapse =
+initSQLGenCtx ::
+  HashSet ExperimentalFeature ->
+  Options.StringifyNumbers ->
+  Options.DangerouslyCollapseBooleans ->
+  Options.BackwardsCompatibleNullInNonNullableVariables ->
+  Options.RemoteNullForwardingPolicy ->
+  SQLGenCtx
+initSQLGenCtx experimentalFeatures stringifyNum dangerousBooleanCollapse nullInNonNullableVariables remoteNullForwardingPolicy =
   let optimizePermissionFilters
         | EFOptimizePermissionFilters `elem` experimentalFeatures = Options.OptimizePermissionFilters
         | otherwise = Options.Don'tOptimizePermissionFilters
@@ -318,7 +349,7 @@ initSQLGenCtx experimentalFeatures stringifyNum dangerousBooleanCollapse =
       bigqueryStringNumericInput
         | EFBigQueryStringNumericInput `elem` experimentalFeatures = Options.EnableBigQueryStringNumericInput
         | otherwise = Options.DisableBigQueryStringNumericInput
-   in SQLGenCtx stringifyNum dangerousBooleanCollapse optimizePermissionFilters bigqueryStringNumericInput
+   in SQLGenCtx stringifyNum dangerousBooleanCollapse nullInNonNullableVariables remoteNullForwardingPolicy optimizePermissionFilters bigqueryStringNumericInput
 
 buildCacheStaticConfig :: AppEnv -> CacheStaticConfig
 buildCacheStaticConfig AppEnv {..} =
@@ -327,7 +358,11 @@ buildCacheStaticConfig AppEnv {..} =
       _cscEventingMode = appEnvEventingMode,
       _cscReadOnlyMode = appEnvEnableReadOnlyMode,
       _cscLogger = _lsLogger appEnvLoggers,
-      _cscAreNativeQueriesEnabled = False,
+      -- Native Queries are always enabled for Postgres in the OSS edition.
+      _cscAreNativeQueriesEnabled = \case
+        Postgres Vanilla -> True
+        DataConnector -> True
+        _ -> False,
       _cscAreStoredProceduresEnabled = False
     }
 
@@ -340,5 +375,7 @@ buildCacheDynamicConfig AppContext {..} = do
       _cdcExperimentalFeatures = acExperimentalFeatures,
       _cdcDefaultNamingConvention = acDefaultNamingConvention,
       _cdcMetadataDefaults = acMetadataDefaults,
-      _cdcApolloFederationStatus = acApolloFederationStatus
+      _cdcApolloFederationStatus = acApolloFederationStatus,
+      _cdcCloseWebsocketsOnMetadataChangeStatus = acCloseWebsocketsOnMetadataChangeStatus,
+      _cdcSchemaSampledFeatureFlags = acSchemaSampledFeatureFlags
     }

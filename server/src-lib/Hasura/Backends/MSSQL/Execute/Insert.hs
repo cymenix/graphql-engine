@@ -23,7 +23,7 @@ import Hasura.Backends.MSSQL.FromIr.SelectIntoTempTable qualified as TSQL
 import Hasura.Backends.MSSQL.Plan
 import Hasura.Backends.MSSQL.SQL.Error
 import Hasura.Backends.MSSQL.ToQuery as TQ
-import Hasura.Backends.MSSQL.Types.Insert (BackendInsert (..), IfMatched)
+import Hasura.Backends.MSSQL.Types.Insert (BackendInsert (..), IfMatched (..))
 import Hasura.Backends.MSSQL.Types.Internal as TSQL
 import Hasura.Base.Error
 import Hasura.EncJSON
@@ -31,9 +31,12 @@ import Hasura.GraphQL.Execute.Backend
 import Hasura.Prelude
 import Hasura.QueryTags (QueryTagsComment)
 import Hasura.RQL.IR
+import Hasura.RQL.IR.ModelInformation
+import Hasura.RQL.IR.ModelInformation.Types (ModelNameInfo (..))
 import Hasura.RQL.Types.Backend
 import Hasura.RQL.Types.BackendType
 import Hasura.RQL.Types.Column
+import Hasura.RQL.Types.Common (SourceName (..))
 import Hasura.RQL.Types.Schema.Options qualified as Options
 import Hasura.Session
 
@@ -43,14 +46,31 @@ executeInsert ::
   (MonadError QErr m, MonadReader QueryTagsComment m) =>
   UserInfo ->
   Options.StringifyNumbers ->
+  SourceName ->
+  ModelSourceType ->
   SourceConfig 'MSSQL ->
   AnnotatedInsert 'MSSQL Void (UnpreparedValue 'MSSQL) ->
-  m (OnBaseMonad (ExceptT QErr) EncJSON)
-executeInsert userInfo stringifyNum sourceConfig annInsert = do
+  m (OnBaseMonad (ExceptT QErr) EncJSON, [ModelNameInfo])
+executeInsert userInfo stringifyNum sourceName modelSourceType sourceConfig annInsert = do
   queryTags <- ask
   -- Convert the leaf values from @'UnpreparedValue' to sql @'Expression'
   insert <- traverse (prepareValueQuery sessionVariables) annInsert
-  pure $ OnBaseMonad $ mssqlRunReadWrite (_mscExecCtx sourceConfig) $ buildInsertTx tableName withAlias stringifyNum insert queryTags
+  let outputInsertMut = _aiOutput annInsert
+  argModels <- do
+    (_, res') <- flip runStateT [] $ getMutationInsertArgumentModelNamesMSSQL sourceName modelSourceType $ _aiData annInsert
+    return res'
+  let insertPermissionModelNames = do
+        (_, res') <- flip runStateT [] $ getArgumentModelNamesGen sourceName modelSourceType $ fst $ _aiCheckCondition $ _aiData annInsert
+        res'
+      postUpdatePermissionModelNames = do
+        let postUpdateCheck = snd $ _aiCheckCondition $ _aiData annInsert
+        case postUpdateCheck of
+          Nothing -> []
+          Just check -> do
+            (_, res') <- flip runStateT [] $ getArgumentModelNamesGen sourceName modelSourceType check
+            res'
+  let modelNames = argModels <> insertPermissionModelNames <> postUpdatePermissionModelNames <> getMutationOutputModelNamesGen sourceName modelSourceType outputInsertMut
+  pure $ (OnBaseMonad $ mssqlRunReadWrite (_mscExecCtx sourceConfig) $ buildInsertTx tableName withAlias stringifyNum insert queryTags, modelNames)
   where
     sessionVariables = _uiSession userInfo
     tableName = _aiTableName $ _aiData annInsert
@@ -162,16 +182,20 @@ buildInsertTx tableName withAlias stringifyNum insert queryTags = do
 
   Tx.unitQueryE defaultMSSQLTxErrorHandler (createInsertedTempTableQuery `withQueryTags` queryTags)
 
-  -- Choose between running a regular @INSERT INTO@ statement or a @MERGE@ statement
-  -- depending on the @if_matched@ field.
-  --
-  -- Affected rows will be inserted into the #inserted temporary table regardless.
-  case ifMatchedField of
-    Nothing -> do
-      -- Insert values into the table using INSERT query
-      let insertQuery = toQueryFlat $ TQ.fromInsert $ TSQL.fromInsert insert
-      Tx.unitQueryE mutationMSSQLTxErrorHandler (insertQuery `withQueryTags` queryTags)
-    Just ifMatched -> buildUpsertTx tableName insert ifMatched queryTags
+  -- check we have any values to insert, SQLServer doesn't appear to have a
+  -- nice syntax for "insert no rows please"
+  unless (null $ _aiInsertObject $ _aiData insert)
+    $
+    -- Choose between running a regular @INSERT INTO@ statement or a @MERGE@ statement
+    -- depending on the @if_matched@ field.
+    --
+    -- Affected rows will be inserted into the #inserted temporary table regardless.
+    case ifMatchedField of
+      Nothing -> do
+        -- Insert values into the table using INSERT query
+        let insertQuery = toQueryFlat $ TQ.fromInsert $ TSQL.fromInsert insert
+        Tx.unitQueryE mutationMSSQLTxErrorHandler (insertQuery `withQueryTags` queryTags)
+      Just ifMatched -> buildUpsertTx tableName insert ifMatched queryTags
 
   -- Build a response to the user using the values in the temporary table named #inserted
   (responseText, checkConditionInt) <- buildInsertResponseTx stringifyNum withAlias insert queryTags
@@ -225,6 +249,7 @@ buildUpsertTx tableName insert ifMatched queryTags = do
         toQueryFlat
           $ TQ.fromInsertValuesIntoTempTable
           $ TSQL.toInsertValuesIntoTempTable tempTableNameValues insert
+
   Tx.unitQueryE mutationMSSQLTxErrorHandler (insertValuesIntoTempTableQuery `withQueryTags` queryTags)
 
   -- Run the MERGE query and store the mutated rows in #inserted temporary table

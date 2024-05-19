@@ -22,6 +22,7 @@ import MySQL from '@site/static/img/databases/logos/mysql.png';
 import Snowflake from '@site/static/img/databases/logos/snowflake.png';
 import AmazonAthena from '@site/static/img/databases/logos/amazon-athena.png';
 import Oracle from '@site/static/img/databases/logos/oracle.png';
+import Clickhouse from '@site/static/img/databases/logos/clickhouse.png';
 
 # <Database /> Databases
 
@@ -126,10 +127,27 @@ import Oracle from '@site/static/img/databases/logos/oracle.png';
       <div className="card">
         <img src={MongoDB} style={{ width: '172px' }} title="MongoDB" alt="Connect MongoDB to Hasura" />
       </div>
-      <h5>MongoDB (Beta)</h5>
+      <h5>MongoDB</h5>
+    </div>
+  </VersionedLink>
+  <VersionedLink to="/databases/clickhouse/index/">
+    <div className="card-wrapper">
+      <div className="card">
+        <img src={Clickhouse} style={{ width: '172px' }} title="ClickHouse" alt="Connect ClickHouse to Hasura" />
+      </div>
+      <h5>ClickHouse</h5>
     </div>
   </VersionedLink>
 </div>
+
+:::info We want to hear from you!
+
+Don't see your database? [Let us know](https://hasura.io/database/request)!
+
+We seek to support as many databases as possible. Your feedback helps us prioritize our roadmap. Use the link above if
+you have a specific database you'd like to see supported by Hasura.
+
+:::
 
 ## Using Databases
 

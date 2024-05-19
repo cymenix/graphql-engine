@@ -18,6 +18,24 @@ const config = {
   organizationName: 'hasura',
   projectName: 'graphql-engine',
   staticDirectories: ['static', 'public'],
+  customFields: {
+    docsBotEndpointURL: (() => {
+      console.log('process.env.release_mode docs-bot', process.env.release_mode);
+      switch (process.env.release_mode) {
+        case 'development':
+          return 'ws://localhost:8000/hasura-docs-ai';
+        case 'production':
+          return 'wss://website-api.hasura.io/chat-bot/hasura-docs-ai';
+        case 'staging':
+          return 'wss://website-api.stage.hasura.io/chat-bot/hasura-docs-ai';
+        default:
+          return 'ws://localhost:8000/hasura-docs-ai'; // default to development if no match
+      }
+    })(),
+    hasuraVersion: 2,
+    DEV_TOKEN: process.env.DEV_TOKEN,
+  },
+  scripts: [],
   webpack: {
     jsLoader: isServer => ({
       loader: require.resolve('swc-loader'),
@@ -137,10 +155,13 @@ const config = {
         // Optional: Algolia search parameters
         // searchParameters: {},
       },
-      // announcementBar: {
-      //   id: 'announcementBar-3', // Increment on change
-      //   content: `⭐️ If you like Docusaurus, give it a star on <a target="_blank" rel="noopener noreferrer" href="https://github.com/facebook/docusaurus">GitHub</a> and follow us on <a target="_blank" rel="noopener noreferrer" href="https://twitter.com/docusaurus" >Twitter</a> ${TwitterSvg}`,
-      // },
+      announcementBar: {
+        id: 'announcementBar-1', // Increment on change
+        content: `This is the documentation for Hasura v2. <a target="_blank" rel="noopener noreferrer" href="https://hasura.io/docs/3.0/index/">Click here for the Hasura DDN docs</a>, the future of data delivery.`,
+        // isCloseable: true,
+        // backgroundColor: '#fafbfc',
+        // textColor: '#091E42',
+      },
       // announcementBar: {
       //   id: 'announcement-bar-3',
       //   content:
@@ -197,6 +218,10 @@ const config = {
             dropdownActiveClassDisabled: true,
             dropdownItemsAfter: [
               {
+                href: 'https://hasura.io/docs/3.0/index/',
+                label: 'v3.x',
+              },
+              {
                 href: 'https://hasura.io/docs/1.0/graphql/core/index.html',
                 label: 'v1.x',
               },
@@ -224,7 +249,7 @@ const config = {
             className: 'nav-link_login',
           },
           {
-            to: 'https://cloud.hasura.io/signup?pg=products&plcmt=header&cta=try-hasura&tech=default',
+            to: 'https://cloud.hasura.io/signup?pg=products&plcmt=header&cta=get_started&tech=default',
             label: 'Get Started',
             position: 'right',
             className: 'nav-link_getting-started',

@@ -5,9 +5,9 @@ module Hasura.StoredProcedure.API
   ( GetStoredProcedure (..),
     TrackStoredProcedure (..),
     UntrackStoredProcedure (..),
+    execTrackStoredProcedure,
+    execUntrackStoredProcedure,
     runGetStoredProcedure,
-    runTrackStoredProcedure,
-    runUntrackStoredProcedure,
     dropStoredProcedureInMetadata,
     module Hasura.StoredProcedure.Types,
   )
@@ -17,29 +17,23 @@ import Autodocodec (HasCodec)
 import Autodocodec qualified as AC
 import Control.Lens (Traversal', has, preview, (^?))
 import Data.Aeson
-import Data.Environment qualified as Env
 import Data.HashMap.Strict.InsOrd.Extended qualified as InsOrdHashMap
 import Data.Text.Extended (toTxt, (<<>))
 import Hasura.Base.Error
 import Hasura.EncJSON
-import Hasura.LogicalModel.API (getCustomTypes)
 import Hasura.LogicalModel.Metadata (LogicalModelName)
 import Hasura.Prelude
-import Hasura.RQL.Types.Backend (Backend, FunctionName, SourceConnConfiguration)
+import Hasura.RQL.Types.Backend (Backend, FunctionName)
 import Hasura.RQL.Types.BackendTag
 import Hasura.RQL.Types.BackendType
 import Hasura.RQL.Types.Common
   ( SourceName,
     sourceNameToText,
-    successMsg,
   )
 import Hasura.RQL.Types.Metadata
 import Hasura.RQL.Types.Metadata.Backend
 import Hasura.RQL.Types.Metadata.Object
-import Hasura.RQL.Types.SchemaCache.Build
 import Hasura.SQL.AnyBackend qualified as AB
-import Hasura.Server.Init.FeatureFlag (HasFeatureFlagChecker (..))
-import Hasura.Server.Init.FeatureFlag qualified as FF
 import Hasura.StoredProcedure.Metadata (ArgumentName, StoredProcedureMetadata (..))
 import Hasura.StoredProcedure.Types
 
@@ -91,38 +85,6 @@ deriving via
 
 -- Configuration
 
--- | Validate a stored procedure and extract the stored procedure info from the request.
-storedProcedureTrackToMetadata ::
-  forall b m.
-  ( BackendMetadata b,
-    MonadError QErr m,
-    MonadIO m,
-    MetadataM m
-  ) =>
-  Env.Environment ->
-  SourceConnConfiguration b ->
-  TrackStoredProcedure b ->
-  m (StoredProcedureMetadata b)
-storedProcedureTrackToMetadata env sourceConnConfig TrackStoredProcedure {..} = do
-  let storedProcedureMetadata =
-        StoredProcedureMetadata
-          { _spmStoredProcedure = tspStoredProcedure,
-            _spmConfig = tspConfig,
-            _spmReturns = tspReturns,
-            _spmArguments = tspArguments,
-            _spmDescription = tspDescription
-          }
-
-  metadata <- getMetadata
-
-  -- lookup logical model in existing metadata
-  case metadata ^? getCustomTypes tspSource . ix tspReturns of
-    Just logicalModel ->
-      validateStoredProcedure @b env sourceConnConfig logicalModel storedProcedureMetadata
-    Nothing -> throw400 NotFound ("Logical model " <> tspReturns <<> " not found.")
-
-  pure storedProcedureMetadata
-
 -- | API payload for the 'get_stored_procedure' endpoint.
 data GetStoredProcedure (b :: BackendType) = GetStoredProcedure
   { gspSource :: SourceName
@@ -147,15 +109,11 @@ instance (Backend b) => ToJSON (GetStoredProcedure b) where
 runGetStoredProcedure ::
   forall b m.
   ( BackendMetadata b,
-    MetadataM m,
-    HasFeatureFlagChecker m,
-    MonadError QErr m
+    MetadataM m
   ) =>
   GetStoredProcedure b ->
   m EncJSON
 runGetStoredProcedure q = do
-  throwIfFeatureDisabled
-
   metadata <- getMetadata
 
   let storedProcedure :: Maybe (StoredProcedures b)
@@ -166,55 +124,52 @@ runGetStoredProcedure q = do
 -- | Handler for the 'track_stored_procedure' endpoint. The type 'TrackStoredProcedure b'
 -- (appearing here in wrapped as 'BackendTrackStoredProcedure b' for 'AnyBackend'
 -- compatibility) is defined in 'class StoredProcedureMetadata'.
-runTrackStoredProcedure ::
+execTrackStoredProcedure ::
   forall b m.
   ( BackendMetadata b,
-    MonadError QErr m,
-    MonadIO m,
-    CacheRWM m,
-    MetadataM m,
-    HasFeatureFlagChecker m
+    MonadError QErr m
   ) =>
-  Env.Environment ->
   TrackStoredProcedure b ->
-  m EncJSON
-runTrackStoredProcedure env trackStoredProcedureRequest = do
-  throwIfFeatureDisabled
-
+  Metadata ->
+  m (MetadataObjId, MetadataModifier)
+execTrackStoredProcedure TrackStoredProcedure {..} metadata = do
   sourceMetadata <-
     maybe
       ( throw400 NotFound
           $ "Source '"
-          <> sourceNameToText source
+          <> sourceNameToText tspSource
           <> "' of kind "
           <> toTxt (reify (backendTag @b))
           <> " not found."
       )
       pure
-      . preview (metaSources . ix source . toSourceMetadata @b)
-      =<< getMetadata
-  let sourceConnConfig = _smConfiguration sourceMetadata
+      . preview (metaSources . ix tspSource . toSourceMetadata @b)
+      $ metadata
 
-  (metadata :: StoredProcedureMetadata b) <- do
-    storedProcedureTrackToMetadata @b env sourceConnConfig trackStoredProcedureRequest
+  let spMetadata =
+        StoredProcedureMetadata
+          { _spmStoredProcedure = tspStoredProcedure,
+            _spmConfig = tspConfig,
+            _spmReturns = tspReturns,
+            _spmArguments = tspArguments,
+            _spmDescription = tspDescription
+          }
 
-  let storedProcedure = _spmStoredProcedure metadata
+  let storedProcedure = _spmStoredProcedure spMetadata
       metadataObj =
-        MOSourceObjId source
+        MOSourceObjId tspSource
           $ AB.mkAnyBackend
           $ SMOStoredProcedure @b storedProcedure
       existingStoredProcedures = InsOrdHashMap.keys (_smStoredProcedures sourceMetadata)
   when (storedProcedure `elem` existingStoredProcedures) do
     throw400 AlreadyTracked $ "Stored procedure '" <> toTxt storedProcedure <> "' is already tracked."
 
-  buildSchemaCacheFor metadataObj
-    $ MetadataModifier
-    $ (metaSources . ix source . toSourceMetadata @b . smStoredProcedures)
-    %~ InsOrdHashMap.insert storedProcedure metadata
+  let metadataModifier =
+        MetadataModifier
+          $ (metaSources . ix tspSource . toSourceMetadata @b . smStoredProcedures)
+          %~ InsOrdHashMap.insert storedProcedure spMetadata
 
-  pure successMsg
-  where
-    source = tspSource trackStoredProcedureRequest
+  pure (metadataObj, metadataModifier)
 
 -- | API payload for the 'untrack_stored_procedure' endpoint.
 data UntrackStoredProcedure (b :: BackendType) = UntrackStoredProcedure
@@ -240,31 +195,25 @@ instance (Backend b) => ToJSON (UntrackStoredProcedure b) where
       ]
 
 -- | Handler for the 'untrack_stored_procedure' endpoint.
-runUntrackStoredProcedure ::
+execUntrackStoredProcedure ::
   forall b m.
   ( BackendMetadata b,
-    MonadError QErr m,
-    CacheRWM m,
-    MetadataM m
+    MonadError QErr m
   ) =>
   UntrackStoredProcedure b ->
-  m EncJSON
-runUntrackStoredProcedure q = do
+  Metadata ->
+  m (MetadataObjId, MetadataModifier)
+execUntrackStoredProcedure (UntrackStoredProcedure {..}) metadata = do
   -- we do not check for feature flag here as we always want users to be able
   -- to remove stored procedures if they'd like
-  assertStoredProcedureExists @b source storedProcedure
+  assertStoredProcedureExists @b utspSource utspStoredProcedure metadata
 
   let metadataObj =
-        MOSourceObjId source
+        MOSourceObjId utspSource
           $ AB.mkAnyBackend
-          $ SMOStoredProcedure @b storedProcedure
+          $ SMOStoredProcedure @b utspStoredProcedure
 
-  buildSchemaCacheFor metadataObj
-    $ dropStoredProcedureInMetadata @b source storedProcedure
-  pure successMsg
-  where
-    source = utspSource q
-    storedProcedure = utspStoredProcedure q
+  pure (metadataObj, dropStoredProcedureInMetadata @b utspSource utspStoredProcedure)
 
 dropStoredProcedureInMetadata ::
   forall b.
@@ -280,22 +229,15 @@ dropStoredProcedureInMetadata source rootFieldName = do
     . smStoredProcedures
     %~ InsOrdHashMap.delete rootFieldName
 
--- | check feature flag is enabled before carrying out any actions
-throwIfFeatureDisabled :: (HasFeatureFlagChecker m, MonadError QErr m) => m ()
-throwIfFeatureDisabled = do
-  enableStoredProcedures <- checkFlag FF.storedProceduresFlag
-  unless enableStoredProcedures (throw500 "Stored Procedures are disabled!")
-
 -- | Check whether a stored procedure exists for the given source.
 assertStoredProcedureExists ::
   forall b m.
-  (Backend b, MetadataM m, MonadError QErr m) =>
+  (Backend b, MonadError QErr m) =>
   SourceName ->
   FunctionName b ->
+  Metadata ->
   m ()
-assertStoredProcedureExists sourceName storedProcedure = do
-  metadata <- getMetadata
-
+assertStoredProcedureExists sourceName storedProcedure metadata = do
   let sourceMetadataTraversal :: Traversal' Metadata (SourceMetadata b)
       sourceMetadataTraversal = metaSources . ix sourceName . toSourceMetadata @b
 

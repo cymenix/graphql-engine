@@ -41,6 +41,8 @@ import Hasura.Backends.DataConnector.API qualified as API
 import Hasura.Prelude
 import Test.Hspec (SpecWith, describe, it, pendingWith)
 
+{-# ANN module ("HLint: ignore Functor law" :: String) #-}
+
 --------------------------------------------------------------------------------
 -- DataConnector Agent Query Tests
 
@@ -229,6 +231,8 @@ schemaInspectionTests = describe "Schema and Source Inspection" $ do
                 <&> Lens.set (key "config_schema_response" . key "config_schema") J.Null
                 <&> Lens.set (key "capabilities" . _Object . Lens.at "datasets") Nothing
                 <&> Lens.set (key "capabilities" . _Object . Lens.at "licensing") Nothing
+                <&> Lens.set (key "capabilities" . _Object . Lens.at "interpolated_queries") Nothing
+                <&> Lens.set (key "capabilities" . key "queries" . _Object . Lens.at "redaction") Nothing
                 <&> Lens.set (key "options" . key "uri") J.Null
                 <&> Lens.set (_Object . Lens.at "display_name") Nothing
                 <&> Lens.set (_Object . Lens.at "release_name") Nothing

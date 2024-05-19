@@ -11,7 +11,7 @@ keywords:
   - SSO
   - SAML
   - google workspace
-sidebar_position: 4
+sidebar_position: 6
 toc_max_heading_level: 2
 ---
 
@@ -21,7 +21,7 @@ import Thumbnail from '@site/src/components/Thumbnail';
 
 <div className="badge badge--primary heading-badge">Available on: Self-hosted Enterprise</div>
 
-## Overview
+## Introduction
 
 SSO can be configured with Google Workspace OAuth2 by setting up [Dex](https://dexidp.io/docs/) as an OAuth2 proxy.
 Access can be configured for all users of a domain or just for members of certain groups.
@@ -281,7 +281,8 @@ services:
     environment:
       HASURA_GRAPHQL_EE_LICENSE_KEY: <YOUR_EE_LICENSE_KEY>
       HASURA_GRAPHQL_ADMIN_SECRET: <YOUR_ADMIN_SECRET>
-      HASURA_GRAPHQL_DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/postgres?sslmode=disable
+      HASURA_METADATA_DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/postgres?sslmode=disable
+      PG_DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/postgres?sslmode=disable
       HASURA_GRAPHQL_ENABLE_CONSOLE: 'true'
       HASURA_GRAPHQL_DEV_MODE: 'true'
       HASURA_GRAPHQL_ENABLED_LOG_TYPES: startup,http-log,webhook-log,websocket-log,query-log

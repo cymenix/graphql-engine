@@ -177,14 +177,14 @@ pciRetries = Lens.lens _pciRetries $ \pci mi -> pci {_pciRetries = mi}
 -- | Postgres Connection info in the form of a templated URI string or
 -- structured data.
 data PostgresConnInfoRaw
-  = PGConnDatabaseUrl Template.URLTemplate
+  = PGConnDatabaseUrl Template.Template
   | PGConnDetails PostgresConnDetailsRaw
   deriving (Show, Eq)
 
 mkUrlConnInfo :: String -> PostgresConnInfoRaw
-mkUrlConnInfo = PGConnDatabaseUrl . Template.mkPlainURLTemplate . Text.pack
+mkUrlConnInfo = PGConnDatabaseUrl . Template.mkPlainTemplate . Text.pack
 
-_PGConnDatabaseUrl :: Prism' PostgresConnInfoRaw Template.URLTemplate
+_PGConnDatabaseUrl :: Prism' PostgresConnInfoRaw Template.Template
 _PGConnDatabaseUrl = Lens.prism' PGConnDatabaseUrl $ \case
   PGConnDatabaseUrl template -> Just template
   PGConnDetails _ -> Nothing
@@ -194,9 +194,9 @@ _PGConnDetails = Lens.prism' PGConnDetails $ \case
   PGConnDatabaseUrl _ -> Nothing
   PGConnDetails prcd -> Just prcd
 
-rawConnDetailsToUrl :: PostgresConnDetailsRaw -> Template.URLTemplate
+rawConnDetailsToUrl :: PostgresConnDetailsRaw -> Template.Template
 rawConnDetailsToUrl =
-  Template.mkPlainURLTemplate . rawConnDetailsToUrlText
+  Template.mkPlainTemplate . rawConnDetailsToUrlText
 
 --------------------------------------------------------------------------------
 
@@ -290,6 +290,8 @@ data ServeOptionsRaw impl = ServeOptionsRaw
     rsoWsReadCookie :: WsReadCookieStatus,
     rsoStringifyNum :: Schema.Options.StringifyNumbers,
     rsoDangerousBooleanCollapse :: Maybe Schema.Options.DangerouslyCollapseBooleans,
+    rsoBackwardsCompatibleNullInNonNullableVariables :: Maybe Schema.Options.BackwardsCompatibleNullInNonNullableVariables,
+    rsoRemoteNullForwardingPolicy :: Maybe Schema.Options.RemoteNullForwardingPolicy,
     rsoEnabledAPIs :: Maybe (HashSet API),
     rsoMxRefetchInt :: Maybe Subscription.Options.RefetchInterval,
     rsoMxBatchSize :: Maybe Subscription.Options.BatchSize,
@@ -320,7 +322,15 @@ data ServeOptionsRaw impl = ServeOptionsRaw
     rsoDefaultNamingConvention :: Maybe NamingCase,
     rsoExtensionsSchema :: Maybe MonadTx.ExtensionsSchema,
     rsoMetadataDefaults :: Maybe MetadataDefaults,
-    rsoApolloFederationStatus :: Maybe Server.Types.ApolloFederationStatus
+    rsoApolloFederationStatus :: Maybe Server.Types.ApolloFederationStatus,
+    rsoCloseWebsocketsOnMetadataChangeStatus :: Maybe Server.Types.CloseWebsocketsOnMetadataChangeStatus,
+    rsoMaxTotalHeaderLength :: Maybe Int,
+    rsoTriggersErrorLogLevelStatus :: Maybe Server.Types.TriggersErrorLogLevelStatus,
+    rsoAsyncActionsFetchBatchSize :: Maybe Int,
+    rsoPersistedQueries :: Maybe Server.Types.PersistedQueriesState,
+    rsoPersistedQueriesTtl :: Maybe Int,
+    rsoRemoteSchemaResponsePriority :: Maybe Server.Types.RemoteSchemaResponsePriority,
+    rsoHeaderPrecedence :: Maybe Server.Types.HeaderPrecedence
   }
 
 -- | Whether or not to serve Console assets.
@@ -589,6 +599,8 @@ data ServeOptions impl = ServeOptions
     soEnableTelemetry :: TelemetryStatus,
     soStringifyNum :: Schema.Options.StringifyNumbers,
     soDangerousBooleanCollapse :: Schema.Options.DangerouslyCollapseBooleans,
+    soBackwardsCompatibleNullInNonNullableVariables :: Schema.Options.BackwardsCompatibleNullInNonNullableVariables,
+    soRemoteNullForwardingPolicy :: Schema.Options.RemoteNullForwardingPolicy,
     soEnabledAPIs :: HashSet API,
     soLiveQueryOpts :: Subscription.Options.LiveQueriesOptions,
     soStreamingQueryOpts :: Subscription.Options.StreamQueriesOptions,
@@ -618,7 +630,15 @@ data ServeOptions impl = ServeOptions
     soDefaultNamingConvention :: NamingCase,
     soExtensionsSchema :: MonadTx.ExtensionsSchema,
     soMetadataDefaults :: MetadataDefaults,
-    soApolloFederationStatus :: Server.Types.ApolloFederationStatus
+    soApolloFederationStatus :: Server.Types.ApolloFederationStatus,
+    soCloseWebsocketsOnMetadataChangeStatus :: Server.Types.CloseWebsocketsOnMetadataChangeStatus,
+    soMaxTotalHeaderLength :: Int,
+    soTriggersErrorLogLevelStatus :: Server.Types.TriggersErrorLogLevelStatus,
+    soAsyncActionsFetchBatchSize :: Int,
+    soPersistedQueries :: Server.Types.PersistedQueriesState,
+    soPersistedQueriesTtl :: Int,
+    soRemoteSchemaResponsePriority :: Server.Types.RemoteSchemaResponsePriority,
+    soHeaderPrecedence :: Server.Types.HeaderPrecedence
   }
 
 -- | 'ResponseInternalErrorsConfig' represents the encoding of the

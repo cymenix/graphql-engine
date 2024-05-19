@@ -1,6 +1,8 @@
 {-# LANGUAGE Arrows #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE UndecidableInstances #-}
+-- ghc 9.6 seems to be doing something screwy with...
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 -- | Types and functions used in the process of building the schema cache from metadata information
 -- stored in the @hdb_catalog@ schema in Postgres.
@@ -26,6 +28,7 @@ module Hasura.RQL.Types.SchemaCache.Build
     buildSchemaCacheWithInvalidations,
     buildSchemaCache,
     tryBuildSchemaCache,
+    tryBuildSchemaCacheWithModifiers,
     tryBuildSchemaCacheAndWarnOnFailingObjects,
     buildSchemaCacheFor,
     throwOnInconsistencies,
@@ -142,8 +145,6 @@ withRecordInconsistencyM metadataObject f = do
           recordInconsistencyM (Just (toJSON exts)) metadataObject "withRecordInconsistency: unexpected ExtraExtensions"
         Just (ExtraInternal internal) ->
           recordInconsistencyM (Just (toJSON internal)) metadataObject (qeError err)
-        Just HideInconsistencies ->
-          pure ()
         Nothing ->
           recordInconsistencyM Nothing metadataObject (qeError err)
       return Nothing
@@ -167,8 +168,6 @@ recordInconsistenciesWith recordInconsistency' f = proc (e, (metadataObject, s))
           recordInconsistency' -< ((Just (toJSON exts), metadataObject), "withRecordInconsistency: unexpected ExtraExtensions")
         Just (ExtraInternal internal) ->
           recordInconsistency' -< ((Just (toJSON internal), metadataObject), qeError err)
-        Just HideInconsistencies ->
-          returnA -< ()
         Nothing ->
           recordInconsistency' -< ((Nothing, metadataObject), qeError err)
       returnA -< Nothing
@@ -195,12 +194,12 @@ withRecordInconsistencies = recordInconsistenciesWith recordInconsistencies
 -- operations for triggering a schema cache rebuild
 
 class (CacheRM m) => CacheRWM m where
-  tryBuildSchemaCacheWithOptions :: BuildReason -> CacheInvalidations -> Metadata -> (ValidateNewSchemaCache a) -> m a
+  tryBuildSchemaCacheWithOptions :: BuildReason -> CacheInvalidations -> Metadata -> Maybe MetadataResourceVersion -> ValidateNewSchemaCache a -> m a
   setMetadataResourceVersionInSchemaCache :: MetadataResourceVersion -> m ()
 
-buildSchemaCacheWithOptions :: (CacheRWM m) => BuildReason -> CacheInvalidations -> Metadata -> m ()
-buildSchemaCacheWithOptions buildReason cacheInvalidation metadata =
-  tryBuildSchemaCacheWithOptions buildReason cacheInvalidation metadata (\_ _ -> (KeepNewSchemaCache, ()))
+buildSchemaCacheWithOptions :: (CacheRWM m) => BuildReason -> CacheInvalidations -> Metadata -> Maybe MetadataResourceVersion -> m ()
+buildSchemaCacheWithOptions buildReason cacheInvalidation metadata metadataResourceVersion =
+  tryBuildSchemaCacheWithOptions buildReason cacheInvalidation metadata metadataResourceVersion (\_ _ -> (KeepNewSchemaCache, ()))
 
 data BuildReason
   = -- | The build was triggered by an update this instance made to the catalog (in the
@@ -255,19 +254,19 @@ data ValidateNewSchemaCacheResult
   deriving stock (Eq, Show, Ord)
 
 instance (CacheRWM m) => CacheRWM (ReaderT r m) where
-  tryBuildSchemaCacheWithOptions a b c d = lift $ tryBuildSchemaCacheWithOptions a b c d
+  tryBuildSchemaCacheWithOptions a b c d e = lift $ tryBuildSchemaCacheWithOptions a b c d e
   setMetadataResourceVersionInSchemaCache = lift . setMetadataResourceVersionInSchemaCache
 
 instance (CacheRWM m) => CacheRWM (StateT s m) where
-  tryBuildSchemaCacheWithOptions a b c d = lift $ tryBuildSchemaCacheWithOptions a b c d
+  tryBuildSchemaCacheWithOptions a b c d e = lift $ tryBuildSchemaCacheWithOptions a b c d e
   setMetadataResourceVersionInSchemaCache = lift . setMetadataResourceVersionInSchemaCache
 
 instance (CacheRWM m) => CacheRWM (TraceT m) where
-  tryBuildSchemaCacheWithOptions a b c d = lift $ tryBuildSchemaCacheWithOptions a b c d
+  tryBuildSchemaCacheWithOptions a b c d e = lift $ tryBuildSchemaCacheWithOptions a b c d e
   setMetadataResourceVersionInSchemaCache = lift . setMetadataResourceVersionInSchemaCache
 
 instance (CacheRWM m) => CacheRWM (PG.TxET QErr m) where
-  tryBuildSchemaCacheWithOptions a b c d = lift $ tryBuildSchemaCacheWithOptions a b c d
+  tryBuildSchemaCacheWithOptions a b c d e = lift $ tryBuildSchemaCacheWithOptions a b c d e
   setMetadataResourceVersionInSchemaCache = lift . setMetadataResourceVersionInSchemaCache
 
 newtype MetadataT m a = MetadataT {unMetadataT :: StateT Metadata m a}
@@ -284,6 +283,7 @@ newtype MetadataT m a = MetadataT {unMetadataT :: StateT Metadata m a}
       CacheRM,
       CacheRWM,
       MFunctor,
+      Tracing.MonadTraceContext,
       Tracing.MonadTrace,
       MonadBase b,
       MonadBaseControl b,
@@ -302,6 +302,7 @@ instance (UserInfoM m) => UserInfoM (MetadataT m) where
 instance (MonadGetPolicies m) => MonadGetPolicies (MetadataT m) where
   runGetApiTimeLimit = lift runGetApiTimeLimit
   runGetPrometheusMetricsGranularity = lift runGetPrometheusMetricsGranularity
+  runGetModelInfoLogStatus = lift $ runGetModelInfoLogStatus
 
 -- | @runMetadataT@ puts a stateful metadata in scope. @MetadataDefaults@ is
 -- provided so that it can be considered from the --metadataDefaults arguments.
@@ -313,7 +314,11 @@ buildSchemaCacheWithInvalidations :: (MetadataM m, CacheRWM m) => CacheInvalidat
 buildSchemaCacheWithInvalidations cacheInvalidations MetadataModifier {..} = do
   metadata <- getMetadata
   let modifiedMetadata = runMetadataModifier metadata
-  buildSchemaCacheWithOptions (CatalogUpdate mempty) cacheInvalidations modifiedMetadata
+  buildSchemaCacheWithOptions
+    (CatalogUpdate mempty)
+    cacheInvalidations
+    modifiedMetadata
+    Nothing
   putMetadata modifiedMetadata
 
 buildSchemaCache :: (MetadataM m, CacheRWM m) => MetadataModifier -> m ()
@@ -325,9 +330,29 @@ tryBuildSchemaCache ::
   (CacheRWM m, MetadataM m) =>
   MetadataModifier ->
   m (HashMap MetadataObjId (NonEmpty InconsistentMetadata))
-tryBuildSchemaCache MetadataModifier {..} = do
-  modifiedMetadata <- runMetadataModifier <$> getMetadata
-  newInconsistentObjects <- tryBuildSchemaCacheWithOptions (CatalogUpdate mempty) mempty modifiedMetadata validateNewSchemaCache
+tryBuildSchemaCache MetadataModifier {..} =
+  tryBuildSchemaCacheWithModifiers [pure . runMetadataModifier]
+
+-- | Rebuilds the schema cache after modifying metadata sequentially and returns any _new_ metadata inconsistencies.
+-- If there are any new inconsistencies, the changes to the metadata and the schema cache are abandoned.
+-- If the metadata modifiers run into validation issues (e.g. a native query is already tracked in the metadata),
+-- we throw these errors back without changing the metadata and schema cache.
+tryBuildSchemaCacheWithModifiers ::
+  (CacheRWM m, MetadataM m) =>
+  [Metadata -> m Metadata] ->
+  m (HashMap MetadataObjId (NonEmpty InconsistentMetadata))
+tryBuildSchemaCacheWithModifiers modifiers = do
+  modifiedMetadata <- do
+    metadata <- getMetadata
+    foldM (flip ($)) metadata modifiers
+
+  newInconsistentObjects <-
+    tryBuildSchemaCacheWithOptions
+      (CatalogUpdate mempty)
+      mempty
+      modifiedMetadata
+      Nothing
+      validateNewSchemaCache
   when (newInconsistentObjects == mempty)
     $ putMetadata modifiedMetadata
   pure $ newInconsistentObjects

@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Hasura.Backends.DataConnector.API.V0.TableSpec (spec, genTableName, genTableInfo) where
+module Hasura.Backends.DataConnector.API.V0.TableSpec (spec, genTableName, genTableTarget, genTableInfo) where
 
 import Data.Aeson.QQ.Simple (aesonQQ)
 import Data.HashMap.Strict qualified as HashMap
 import Hasura.Backends.DataConnector.API.V0
-import Hasura.Backends.DataConnector.API.V0.ColumnSpec (genColumnInfo, genColumnName)
+import Hasura.Backends.DataConnector.API.V0.ColumnSpec (genColumnInfo, genColumnName, genColumnSelector)
 import Hasura.Generator.Common
 import Hasura.Prelude
 import Hedgehog
@@ -60,7 +60,14 @@ spec = do
             Table
             [ColumnInfo (ColumnName "id") (ColumnTypeScalar $ ScalarType "string") False Nothing False False Nothing]
             (Just $ ColumnName "id" :| [])
-            (ForeignKeys $ HashMap.singleton (ConstraintName "Artist") (Constraint (TableName ["artist_table"]) (HashMap.singleton (ColumnName "ArtistId") (ColumnName "ArtistId"))))
+            ( ForeignKeys
+                $ HashMap.singleton
+                  (ConstraintName "Artist")
+                  ( Constraint
+                      (TableName ["artist_table"])
+                      (ColumnPathMapping $ HashMap.singleton (mkColumnSelector $ ColumnName "ArtistId") (mkColumnSelector $ ColumnName "ArtistId"))
+                  )
+            )
             (Just "my description")
             False
             False
@@ -90,6 +97,9 @@ spec = do
 genTableName :: (MonadGen m) => m TableName
 genTableName = TableName <$> Gen.nonEmpty (linear 1 3) (genArbitraryAlphaNumText defaultRange)
 
+genTableTarget :: (MonadGen m) => m Target
+genTableTarget = TTable . TargetTable <$> genTableName
+
 genForeignKeys :: (MonadGen m) => m ForeignKeys
 genForeignKeys = ForeignKeys <$> genHashMap genConstraintName genConstraint defaultRange
 
@@ -98,7 +108,7 @@ genConstraintName = ConstraintName <$> genArbitraryAlphaNumText defaultRange
 
 genConstraint :: (MonadGen m) => m Constraint
 genConstraint =
-  let mapping = genHashMap genColumnName genColumnName defaultRange
+  let mapping = ColumnPathMapping <$> genHashMap genColumnSelector genColumnSelector defaultRange
    in Constraint <$> genTableName <*> mapping
 
 genTableType :: (MonadGen m) => m TableType

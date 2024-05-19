@@ -1,27 +1,25 @@
 import { useCallback, useMemo } from 'react';
-import { useQueryClient } from 'react-query';
+import { Driver } from '../../../dataSources';
 import { exportMetadata } from '../../../metadata/actions';
 import { useAppDispatch } from '../../../storeHooks';
-import { generateQueryKeys } from '../../DatabaseRelationships/utils/queryClientUtils';
 import { useMetadataMigration } from '../../MetadataAPI';
+import { useHttpClient } from '../../Network';
+import { useMetadata } from '../../hasura-metadata-api';
 import { DatabaseConnection } from '../types';
-import { usePushRoute } from './usePushRoute';
 import {
   sendConnectDatabaseTelemetryEvent,
   transformErrorResponse,
 } from '../utils';
-import { useHttpClient } from '../../Network';
-import { Driver } from '../../../dataSources';
-import { useMetadata } from '../../hasura-metadata-api';
+import { usePushRoute } from './usePushRoute';
+import { default as handleAsyncError } from 'await-to-js';
 
 export const useManageDatabaseConnection = ({
   onSuccess,
   onError,
 }: {
-  onSuccess?: () => void;
-  onError?: (err: Error) => void;
+  onSuccess: () => void;
+  onError: (err: Error) => void;
 }) => {
-  const queryClient = useQueryClient();
   const { mutateAsync, ...rest } = useMetadataMigration({
     errorTransform: transformErrorResponse,
   });
@@ -33,8 +31,7 @@ export const useManageDatabaseConnection = ({
   const mutationOptions = useMemo(
     () => ({
       onSuccess: () => {
-        queryClient.invalidateQueries(generateQueryKeys.metadata());
-        onSuccess?.();
+        onSuccess();
 
         // this code is only for the demo
         push('/data/manage');
@@ -42,34 +39,49 @@ export const useManageDatabaseConnection = ({
       },
       onError: (err: Error) => {
         console.log('~', err);
-        onError?.(err);
+        onError(err);
       },
     }),
-    [dispatch, onError, onSuccess, push, queryClient]
+    [dispatch, onError, onSuccess, push]
   );
 
   const createConnection = useCallback(
     async (databaseConnection: DatabaseConnection) => {
-      await mutateAsync(
-        {
-          query: {
-            type: `${databaseConnection.driver}_add_source`,
-            args: {
-              name: databaseConnection.details.name,
-              configuration: databaseConnection.details.configuration,
-              customization: databaseConnection.details.customization,
+      const [mutationError] = await handleAsyncError(
+        mutateAsync(
+          {
+            query: {
+              type: `${databaseConnection.driver}_add_source`,
+              args: {
+                name: databaseConnection.details.name,
+                configuration: databaseConnection.details.configuration,
+                customization: databaseConnection.details.customization,
+              },
             },
           },
-        },
-        mutationOptions
+          mutationOptions
+        )
       );
-      sendConnectDatabaseTelemetryEvent({
-        httpClient,
-        driver: databaseConnection.driver as Driver,
-        dataSourceName: databaseConnection.details.name,
-      });
+
+      if (mutationError) {
+        //console.log('Error in create connection mutation: ', mutationError);
+        // if there's an error with the connection mutation, return and don't send telemetry request
+        return;
+      }
+
+      const [telemetryError] = await handleAsyncError(
+        sendConnectDatabaseTelemetryEvent({
+          httpClient,
+          driver: databaseConnection.driver as Driver,
+          dataSourceName: databaseConnection.details.name,
+        })
+      );
+
+      if (telemetryError) {
+        //console.log('Error in create connection telemetry: ', telemetryError);
+      }
     },
-    [httpClient, mutateAsync, mutationOptions]
+    [httpClient, mutateAsync, mutationOptions, onError]
   );
 
   const editConnection = useCallback(
@@ -94,21 +106,27 @@ export const useManageDatabaseConnection = ({
         },
       };
 
-      mutateAsync(
-        {
-          query: {
-            type: 'bulk',
-            source: databaseConnection.originalName,
-            resource_version,
-            args:
-              databaseConnection.details.name ===
-              databaseConnection.originalName
-                ? [updateConfigurationPayload]
-                : [renameConnectionPayload, updateConfigurationPayload],
+      const [mutationError] = await handleAsyncError(
+        mutateAsync(
+          {
+            query: {
+              type: 'bulk',
+              source: databaseConnection.originalName,
+              resource_version,
+              args:
+                databaseConnection.details.name ===
+                databaseConnection.originalName
+                  ? [updateConfigurationPayload]
+                  : [renameConnectionPayload, updateConfigurationPayload],
+            },
           },
-        },
-        mutationOptions
+          mutationOptions
+        )
       );
+
+      if (mutationError) {
+        //console.log('Error in create connection mutation: ', mutationError);
+      }
     },
     [mutateAsync, mutationOptions, resource_version]
   );

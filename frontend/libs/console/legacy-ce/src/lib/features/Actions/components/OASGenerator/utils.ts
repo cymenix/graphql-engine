@@ -14,11 +14,8 @@ import {
   Oas2,
   Oas3,
   createGraphQLSchema,
-} from '@dancamma/openapi-to-graphql';
-import {
-  ReferenceObject,
-  SchemaObject,
-} from '@dancamma/openapi-to-graphql/dist/types/oas3';
+} from '@hasura/open-api-to-graphql';
+import { ReferenceObject, SchemaObject } from '@hasura/open-api-to-graphql';
 import { Microfiber } from 'microfiber';
 import { formatSdl } from 'format-graphql';
 import { getActionRequestSampleInput } from '../../../../components/Services/Actions/Add/utils';
@@ -117,7 +114,7 @@ const createTransform = (
       'preferredName' in definition &&
       typeof definition.preferredName === 'string'
     ) {
-      const newPrefix = prefix.split(/\./)[prefix.split(/\./).length - 1];
+      const newPrefix = prefix.match(/\['(.*?)'\]/)?.[1] || '';
       const { transform, needTransform } = createTransform(
         definition.subDefinitions,
         newPrefix,
@@ -154,7 +151,7 @@ const createTransform = (
           needTransform: childrenNeedTransform,
         } = createTransform(
           value.subDefinitions,
-          `${prefix}?.${keyTo}`,
+          `${prefix}?['${keyTo}']`,
           inverse
         );
         needTransform = needTransform || childrenNeedTransform;
@@ -165,7 +162,7 @@ const createTransform = (
       }
       return {
         ...acc,
-        [keyFrom]: `{{${prefix}?.${keyTo}}}`,
+        [keyFrom]: `{{${prefix}?['${keyTo}']}}`,
       };
     }, {});
     return {
@@ -419,9 +416,13 @@ export const translateAction = (
     sdlWithoutComments
       .replace(/"""[^]*?"""/g, '')
       .replace(/type Query {[^]*?}/g, '')
+      .replace(/type QueryPlaceholder {[^]*?}/g, '')
       .replace(/type Mutation {[^]*?}/g, '')
+      .replace(/type MutationPlaceholder {[^]*?}/g, '')
       .replace(/type Query\s+/, '')
       .replace(/type Mutation\s+/, '')
+      .replace(/type QueryPlaceholder\s+/, '')
+      .replace(/type MutationPlaceholder\s+/, '')
   );
 
   let sampleInput = JSON.parse(

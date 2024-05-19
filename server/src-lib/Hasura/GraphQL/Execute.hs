@@ -17,11 +17,14 @@ where
 
 import Control.Monad.Trans.Control (MonadBaseControl)
 import Data.Aeson qualified as J
+import Data.Aeson.Ordered qualified as JO
 import Data.Containers.ListUtils (nubOrd)
 import Data.Environment qualified as Env
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrdHashMap
 import Data.HashSet qualified as HS
+import Data.List (elemIndex)
+import Data.Monoid (Endo (..))
 import Data.Tagged qualified as Tagged
 import Hasura.Backends.Postgres.Execute.Types
 import Hasura.Base.Error
@@ -47,18 +50,20 @@ import Hasura.Metadata.Class
 import Hasura.Prelude
 import Hasura.QueryTags
 import Hasura.RQL.IR qualified as IR
+import Hasura.RQL.IR.ModelInformation
 import Hasura.RQL.Types.Action
 import Hasura.RQL.Types.Allowlist
 import Hasura.RQL.Types.Backend
 import Hasura.RQL.Types.BackendType
 import Hasura.RQL.Types.Common
+import Hasura.RQL.Types.OpenTelemetry (getOtelTracesPropagator)
 import Hasura.RQL.Types.Roles (adminRoleName)
 import Hasura.RQL.Types.SchemaCache
 import Hasura.RQL.Types.Subscription
 import Hasura.SQL.AnyBackend qualified as AB
 import Hasura.Server.Init qualified as Init
 import Hasura.Server.Prometheus (PrometheusMetrics)
-import Hasura.Server.Types (ReadOnlyMode (..), RequestId (..))
+import Hasura.Server.Types (HeaderPrecedence, MonadGetPolicies, ReadOnlyMode (..), RequestId (..))
 import Hasura.Services
 import Hasura.Session (BackendOnlyFieldAccess (..), UserInfo (..))
 import Hasura.Tracing qualified as Tracing
@@ -98,7 +103,7 @@ data ResolvedExecutionPlan
   | -- | mutation execution; only __typename introspection supported
     MutationExecutionPlan EB.ExecutionPlan
   | -- | either action query or live query execution; remote schemas and introspection not supported
-    SubscriptionExecutionPlan SubscriptionExecution
+    SubscriptionExecutionPlan (SubscriptionExecution, Maybe (Endo JO.Value))
 
 newtype MultiplexedSubscriptionQueryPlan (b :: BackendType)
   = MultiplexedSubscriptionQueryPlan (ES.SubscriptionQueryPlan b (EB.MultiplexedQuery b))
@@ -106,8 +111,8 @@ newtype MultiplexedSubscriptionQueryPlan (b :: BackendType)
 newtype SubscriptionQueryPlan = SubscriptionQueryPlan (AB.AnyBackend MultiplexedSubscriptionQueryPlan)
 
 data SourceSubscription
-  = SSLivequery !(HashSet ActionId) !(ActionLogResponseMap -> ExceptT QErr IO (SourceName, SubscriptionQueryPlan))
-  | SSStreaming !RootFieldAlias !(SourceName, SubscriptionQueryPlan)
+  = SSLivequery !(HashSet ActionId) !(ActionLogResponseMap -> ExceptT QErr IO ((SourceName, SubscriptionQueryPlan), [ModelInfoPart]))
+  | SSStreaming !RootFieldAlias !((SourceName, SubscriptionQueryPlan), [ModelInfoPart])
 
 -- | The comprehensive subscription plan. We only support either
 -- 1. Fields with only async action queries with no associated relationships
@@ -126,45 +131,56 @@ buildSubscriptionPlan ::
   ParameterizedQueryHash ->
   [HTTP.Header] ->
   Maybe G.Name ->
-  m SubscriptionExecution
-buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders operationName = do
-  ((liveQueryOnSourceFields, noRelationActionFields), streamingFields) <- foldlM go ((mempty, mempty), mempty) (InsOrdHashMap.toList rootFields)
+  Init.ResponseInternalErrorsConfig ->
+  m ((SubscriptionExecution, Maybe (Endo JO.Value)), [ModelInfoPart])
+buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders operationName responseErrorsConfig = do
+  (((liveQueryOnSourceFields, noRelationActionFields), streamingFields), modifier) <- foldlM go (((mempty, mempty), mempty), mempty) (InsOrdHashMap.toList rootFields)
 
   if
     | null liveQueryOnSourceFields && null streamingFields ->
-        pure $ SEAsyncActionsWithNoRelationships noRelationActionFields
+        pure $ ((SEAsyncActionsWithNoRelationships noRelationActionFields, modifier), [])
     | null noRelationActionFields -> do
         if
           | null liveQueryOnSourceFields -> do
               case InsOrdHashMap.toList streamingFields of
                 [] -> throw500 "empty selset for subscription"
                 [(rootFieldName, (sourceName, exists))] -> do
-                  subscriptionPlan <- AB.dispatchAnyBackend @EB.BackendExecute
+                  (subscriptionPlan, modelInfoList) <- AB.dispatchAnyBackend @EB.BackendExecute
                     exists
                     \(IR.SourceConfigWith sourceConfig queryTagsConfig (IR.QDBR qdb) :: IR.SourceConfigWith db b) -> do
                       let subscriptionQueryTagsAttributes = encodeQueryTags $ QTLiveQuery $ LivequeryMetadata rootFieldName parameterizedQueryHash
                           queryTagsComment = Tagged.untag $ createQueryTags @m subscriptionQueryTagsAttributes queryTagsConfig
-                      SubscriptionQueryPlan
-                        . AB.mkAnyBackend
-                        . MultiplexedSubscriptionQueryPlan
-                        <$> runReaderT
-                          ( EB.mkDBStreamingSubscriptionPlan
-                              userInfo
-                              sourceName
-                              sourceConfig
-                              (rootFieldName, qdb)
-                              reqHeaders
-                              operationName
-                          )
-                          queryTagsComment
+                          mkDBStreamingSubscriptionPlanResult =
+                            runReaderT
+                              ( EB.mkDBStreamingSubscriptionPlan
+                                  userInfo
+                                  sourceName
+                                  sourceConfig
+                                  (rootFieldName, qdb)
+                                  reqHeaders
+                                  operationName
+                              )
+                              queryTagsComment
+                      modelInfo <- snd <$> mkDBStreamingSubscriptionPlanResult
+                      subscriptionPlan' <-
+                        SubscriptionQueryPlan
+                          . AB.mkAnyBackend
+                          . MultiplexedSubscriptionQueryPlan
+                          . fst
+                          <$> mkDBStreamingSubscriptionPlanResult
+                      pure (subscriptionPlan', modelInfo)
                   pure
+                    $ (,[])
+                    $ (,modifier)
                     $ SEOnSourceDB
                     $ SSStreaming rootFieldName
-                    $ (sourceName, subscriptionPlan)
+                    $ ((sourceName, subscriptionPlan), modelInfoList)
                 _ -> throw400 NotSupported "exactly one root field is allowed for streaming subscriptions"
           | null streamingFields -> do
               let allActionIds = HS.fromList $ map fst $ lefts $ toList liveQueryOnSourceFields
               pure
+                $ (,[])
+                $ (,modifier)
                 $ SEOnSourceDB
                 $ SSLivequery allActionIds
                 $ \actionLogMap -> do
@@ -191,18 +207,7 @@ buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders oper
           "async action queries with no relationships aren't expected to mix with normal source database queries"
   where
     go ::
-      ( ( RootFieldMap
-            ( Either
-                (ActionId, (PGSourceConfig, EA.AsyncActionQuerySourceExecution (IR.UnpreparedValue ('Postgres 'Vanilla))))
-                (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue)))
-            ),
-          RootFieldMap (ActionId, ActionLogResponse -> Either QErr EncJSON)
-        ),
-        RootFieldMap (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue)))
-      ) ->
-      (RootFieldAlias, IR.QueryRootField IR.UnpreparedValue) ->
-      m
-        ( ( RootFieldMap
+      ( ( ( RootFieldMap
               ( Either
                   (ActionId, (PGSourceConfig, EA.AsyncActionQuerySourceExecution (IR.UnpreparedValue ('Postgres 'Vanilla))))
                   (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue)))
@@ -210,10 +215,34 @@ buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders oper
             RootFieldMap (ActionId, ActionLogResponse -> Either QErr EncJSON)
           ),
           RootFieldMap (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue)))
+        ),
+        Maybe (Endo JO.Value)
+      ) ->
+      (RootFieldAlias, IR.QueryRootField IR.UnpreparedValue) ->
+      m
+        ( ( ( RootFieldMap
+                ( Either
+                    (ActionId, (PGSourceConfig, EA.AsyncActionQuerySourceExecution (IR.UnpreparedValue ('Postgres 'Vanilla))))
+                    (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue)))
+                ),
+              RootFieldMap (ActionId, ActionLogResponse -> Either QErr EncJSON)
+            ),
+            RootFieldMap (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue)))
+          ),
+          Maybe (Endo JO.Value)
         )
-    go (accLiveQueryFields, accStreamingFields) (gName, field) = case field of
-      IR.RFRemote _ -> throw400 NotSupported "subscription to remote server is not supported"
-      IR.RFRaw _ -> throw400 NotSupported "Introspection not supported over subscriptions"
+    go ((accLiveQueryFields, accStreamingFields), modifier) (gName, field) = case field of
+      IR.RFRemote _ _ -> throw400 NotSupported "subscription to remote server is not supported"
+      IR.RFRaw val -> do
+        when (isNothing (_rfaNamespace gName)) do
+          throw400 NotSupported "Introspection at root field level is not supported over subscriptions"
+        let fieldIndex = fromMaybe 0 $ elemIndex gName $ InsOrdHashMap.keys rootFields
+            newModifier oldResponse =
+              case JO.asObject oldResponse of
+                Left (_err :: String) -> oldResponse
+                Right responseObj ->
+                  JO.Object $ JO.insert (fieldIndex, G.unName $ _rfaAlias gName) val responseObj
+        pure ((accLiveQueryFields, accStreamingFields), Just (Endo newModifier) <> modifier)
       IR.RFMulti _ -> throw400 NotSupported "not supported over subscriptions"
       IR.RFDB src e -> do
         let subscriptionType =
@@ -230,8 +259,8 @@ buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders oper
             $ throw400 NotSupported "Remote relationships are not allowed in subscriptions"
           pure $ IR.SourceConfigWith srcConfig queryTagsConfig (IR.QDBR newQDB)
         case subscriptionType of
-          Streaming -> pure (accLiveQueryFields, InsOrdHashMap.insert gName (src, newQDB) accStreamingFields)
-          LiveQuery -> pure (first (InsOrdHashMap.insert gName (Right (src, newQDB))) accLiveQueryFields, accStreamingFields)
+          Streaming -> pure ((accLiveQueryFields, InsOrdHashMap.insert gName (src, newQDB) accStreamingFields), modifier)
+          LiveQuery -> pure ((first (InsOrdHashMap.insert gName (Right (src, newQDB))) accLiveQueryFields, accStreamingFields), modifier)
       IR.RFAction action -> do
         let (noRelsDBAST, remoteJoins) = RJ.getRemoteJoinsActionQuery action
         unless (isNothing remoteJoins)
@@ -239,11 +268,11 @@ buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders oper
         case noRelsDBAST of
           IR.AQAsync q -> do
             let actionId = IR._aaaqActionId q
-            case EA.resolveAsyncActionQuery userInfo q of
+            case EA.resolveAsyncActionQuery userInfo q responseErrorsConfig of
               EA.AAQENoRelationships respMaker ->
-                pure $ (second (InsOrdHashMap.insert gName (actionId, respMaker)) accLiveQueryFields, accStreamingFields)
+                pure $ ((second (InsOrdHashMap.insert gName (actionId, respMaker)) accLiveQueryFields, accStreamingFields), modifier)
               EA.AAQEOnSourceDB srcConfig dbExecution ->
-                pure $ (first (InsOrdHashMap.insert gName (Left (actionId, (srcConfig, dbExecution)))) accLiveQueryFields, accStreamingFields)
+                pure $ ((first (InsOrdHashMap.insert gName (Left (actionId, (srcConfig, dbExecution)))) accLiveQueryFields, accStreamingFields), modifier)
           IR.AQQuery _ -> throw400 NotSupported "query actions cannot be run as a subscription"
 
     buildAction ::
@@ -251,19 +280,21 @@ buildSubscriptionPlan userInfo rootFields parameterizedQueryHash reqHeaders oper
       RootFieldMap
         (SourceName, AB.AnyBackend (IR.SourceConfigWith (IR.QueryDBRoot Void IR.UnpreparedValue))) ->
       RootFieldAlias ->
-      ExceptT QErr IO (SourceName, SubscriptionQueryPlan)
+      ExceptT QErr IO ((SourceName, SubscriptionQueryPlan), [ModelInfoPart])
     buildAction (sourceName, exists) allFields rootFieldName = do
-      subscriptionPlan <- AB.dispatchAnyBackend @EB.BackendExecute
+      (subscriptionPlan, modelInfo) <- AB.dispatchAnyBackend @EB.BackendExecute
         exists
         \(IR.SourceConfigWith sourceConfig queryTagsConfig _ :: IR.SourceConfigWith db b) -> do
           qdbs <- traverse (checkField @b sourceName) allFields
           let subscriptionQueryTagsAttributes = encodeQueryTags $ QTLiveQuery $ LivequeryMetadata rootFieldName parameterizedQueryHash
           let queryTagsComment = Tagged.untag $ createQueryTags @m subscriptionQueryTagsAttributes queryTagsConfig
-          SubscriptionQueryPlan
-            . AB.mkAnyBackend
-            . MultiplexedSubscriptionQueryPlan
+          first
+            ( SubscriptionQueryPlan
+                . AB.mkAnyBackend
+                . MultiplexedSubscriptionQueryPlan
+            )
             <$> runReaderT (EB.mkLiveQuerySubscriptionPlan userInfo sourceName sourceConfig (_rfaNamespace rootFieldName) qdbs reqHeaders operationName) queryTagsComment
-      pure (sourceName, subscriptionPlan)
+      pure ((sourceName, subscriptionPlan), modelInfo)
 
     checkField ::
       forall b m1.
@@ -315,7 +346,8 @@ getResolvedExecPlan ::
     Tracing.MonadTrace m,
     EC.MonadGQLExecutionCheck m,
     MonadQueryTags m,
-    ProvidesNetwork m
+    ProvidesNetwork m,
+    MonadGetPolicies m
   ) =>
   Env.Environment ->
   L.Logger L.Hasura ->
@@ -324,14 +356,15 @@ getResolvedExecPlan ::
   SQLGenCtx ->
   ReadOnlyMode ->
   SchemaCache ->
-  SchemaCacheVer ->
   ET.GraphQLQueryType ->
   [HTTP.Header] ->
   GQLReqUnparsed ->
   SingleOperation -> -- the first step of the execution plan
   Maybe G.Name ->
   RequestId ->
-  m (ParameterizedQueryHash, ResolvedExecutionPlan)
+  Init.ResponseInternalErrorsConfig ->
+  HeaderPrecedence ->
+  m (ParameterizedQueryHash, ResolvedExecutionPlan, [ModelInfoPart])
 getResolvedExecPlan
   env
   logger
@@ -340,43 +373,26 @@ getResolvedExecPlan
   sqlGenCtx
   readOnlyMode
   sc
-  _scVer
   queryType
   reqHeaders
   reqUnparsed
   queryParts -- the first step of the execution plan
   maybeOperationName
-  reqId = do
+  reqId
+  responseErrorsConfig
+  headerPrecedence = do
     let gCtx = makeGQLContext userInfo sc queryType
+        tracesPropagator = getOtelTracesPropagator $ scOpenTelemetryConfig sc
 
     -- Construct the full 'ResolvedExecutionPlan' from the 'queryParts :: SingleOperation'.
-    (parameterizedQueryHash, resolvedExecPlan) <-
+    (parameterizedQueryHash, resolvedExecPlan, modelInfoList') <-
       case queryParts of
         G.TypedOperationDefinition G.OperationTypeQuery _ varDefs directives inlinedSelSet -> Tracing.newSpan "Resolve query execution plan" $ do
-          (executionPlan, queryRootFields, dirMap, parameterizedQueryHash) <-
+          (executionPlan, queryRootFields, dirMap, parameterizedQueryHash, modelInfoList) <-
             EQ.convertQuerySelSet
               env
               logger
-              prometheusMetrics
-              gCtx
-              userInfo
-              reqHeaders
-              directives
-              inlinedSelSet
-              varDefs
-              reqUnparsed
-              (scSetGraphqlIntrospectionOptions sc)
-              reqId
-              maybeOperationName
-          Tracing.attachMetadata [("graphql.operation.type", "query"), ("parameterized_query_hash", bsToTxt $ unParamQueryHash parameterizedQueryHash)]
-          pure (parameterizedQueryHash, QueryExecutionPlan executionPlan queryRootFields dirMap)
-        G.TypedOperationDefinition G.OperationTypeMutation _ varDefs directives inlinedSelSet -> Tracing.newSpan "Resolve mutation execution plan" $ do
-          when (readOnlyMode == ReadOnlyModeEnabled)
-            $ throw400 NotSupported "Mutations are not allowed when read-only mode is enabled"
-          (executionPlan, parameterizedQueryHash) <-
-            EM.convertMutationSelectionSet
-              env
-              logger
+              tracesPropagator
               prometheusMetrics
               gCtx
               sqlGenCtx
@@ -389,11 +405,37 @@ getResolvedExecPlan
               (scSetGraphqlIntrospectionOptions sc)
               reqId
               maybeOperationName
+              responseErrorsConfig
+              headerPrecedence
+          Tracing.attachMetadata [("graphql.operation.type", "query"), ("parameterized_query_hash", bsToTxt $ unParamQueryHash parameterizedQueryHash)]
+          pure (parameterizedQueryHash, QueryExecutionPlan executionPlan queryRootFields dirMap, modelInfoList)
+        G.TypedOperationDefinition G.OperationTypeMutation _ varDefs directives inlinedSelSet -> Tracing.newSpan "Resolve mutation execution plan" $ do
+          when (readOnlyMode == ReadOnlyModeEnabled)
+            $ throw400 NotSupported "Mutations are not allowed when read-only mode is enabled"
+          (executionPlan, parameterizedQueryHash, modelInfoList) <-
+            EM.convertMutationSelectionSet
+              env
+              logger
+              tracesPropagator
+              prometheusMetrics
+              gCtx
+              sqlGenCtx
+              userInfo
+              reqHeaders
+              directives
+              inlinedSelSet
+              varDefs
+              reqUnparsed
+              (scSetGraphqlIntrospectionOptions sc)
+              reqId
+              maybeOperationName
+              headerPrecedence
           Tracing.attachMetadata [("graphql.operation.type", "mutation")]
-          pure (parameterizedQueryHash, MutationExecutionPlan executionPlan)
+          pure (parameterizedQueryHash, MutationExecutionPlan executionPlan, modelInfoList)
         G.TypedOperationDefinition G.OperationTypeSubscription _ varDefs directives inlinedSelSet -> Tracing.newSpan "Resolve subscription execution plan" $ do
           (normalizedDirectives, normalizedSelectionSet) <-
             ER.resolveVariables
+              (nullInNonNullableVariables sqlGenCtx)
               varDefs
               (fromMaybe mempty (_grVariables reqUnparsed))
               directives
@@ -416,13 +458,13 @@ getResolvedExecPlan
             _ ->
               unless (allowMultipleRootFields && isSingleNamespace unpreparedAST)
                 $ throw400 ValidationFailed "subscriptions must select one top level field"
-          subscriptionPlan <- buildSubscriptionPlan userInfo unpreparedAST parameterizedQueryHash reqHeaders maybeOperationName
+          (subscriptionPlan, modelInfoList) <- buildSubscriptionPlan userInfo unpreparedAST parameterizedQueryHash reqHeaders maybeOperationName responseErrorsConfig
           Tracing.attachMetadata [("graphql.operation.type", "subscription")]
-          pure (parameterizedQueryHash, SubscriptionExecutionPlan subscriptionPlan)
+          pure (parameterizedQueryHash, SubscriptionExecutionPlan subscriptionPlan, modelInfoList)
     -- the parameterized query hash is calculated here because it is used in multiple
     -- places and instead of calculating it separately, this is a common place to calculate
     -- the parameterized query hash and then thread it to the required places
-    pure $ (parameterizedQueryHash, resolvedExecPlan)
+    pure $ (parameterizedQueryHash, resolvedExecPlan, modelInfoList')
 
 -- | Even when directive _multiple_top_level_fields is given, we can't allow
 -- fields within differently-aliased namespaces.

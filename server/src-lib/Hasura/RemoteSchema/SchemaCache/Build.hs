@@ -18,7 +18,9 @@ import Data.Text.Extended
 import Hasura.Base.Error
 import Hasura.EncJSON (encJFromLBS)
 import Hasura.GraphQL.RemoteServer
+import Hasura.GraphQL.Schema.Common (SchemaSampledFeatureFlags)
 import Hasura.Incremental qualified as Inc
+import Hasura.Logging
 import Hasura.Prelude
 import Hasura.RQL.DDL.Schema.Cache.Common
 import Hasura.RQL.DDL.Schema.Cache.Permission
@@ -48,21 +50,22 @@ buildRemoteSchemas ::
     MonadError QErr m,
     ProvidesNetwork m
   ) =>
+  Logger Hasura ->
   Env.Environment ->
-  ( (Inc.Dependency (HashMap RemoteSchemaName Inc.InvalidationKey), OrderedRoles, Maybe (HashMap RemoteSchemaName BL.ByteString)),
+  ( (Inc.Dependency (HashMap RemoteSchemaName Inc.InvalidationKey), OrderedRoles, Maybe (HashMap RemoteSchemaName BL.ByteString), SchemaSampledFeatureFlags),
     [RemoteSchemaMetadataG remoteRelationshipDefinition]
   )
     `arr` HashMap RemoteSchemaName (PartiallyResolvedRemoteSchemaCtxG remoteRelationshipDefinition, MetadataObject)
-buildRemoteSchemas env =
+buildRemoteSchemas logger env =
   buildInfoMapPreservingMetadata _rsmName mkRemoteSchemaMetadataObject buildRemoteSchema
   where
     -- We want to cache this call because it fetches the remote schema over
     -- HTTP, and we don’t want to re-run that if the remote schema definition
     -- hasn’t changed.
-    buildRemoteSchema = Inc.cache proc ((invalidationKeys, orderedRoles, storedIntrospection), remoteSchema@(RemoteSchemaMetadata name defn _comment permissions relationships)) -> do
+    buildRemoteSchema = Inc.cache proc ((invalidationKeys, orderedRoles, storedIntrospection, schemaSampledFeatureFlags), remoteSchema@(RemoteSchemaMetadata name defn _comment permissions relationships)) -> do
       Inc.dependOn -< Inc.selectKeyD name invalidationKeys
       let metadataObj = mkRemoteSchemaMetadataObject remoteSchema
-      upstreamResponse <- bindA -< runExceptT (noopTrace $ addRemoteSchemaP2Setup env defn)
+      upstreamResponse <- bindA -< runExceptT (noopTrace $ addRemoteSchemaP2Setup name env schemaSampledFeatureFlags defn)
       remoteSchemaContextParts <-
         case upstreamResponse of
           Right upstream@(_, byteString, _) -> do
@@ -79,8 +82,8 @@ buildRemoteSchemas env =
                 processedIntrospection <-
                   bindA
                     -< runExceptT do
-                      rsDef <- validateRemoteSchemaDef env defn
-                      (ir, rsi) <- stitchRemoteSchema storedRawIntrospection rsDef
+                      rsDef <- validateRemoteSchemaDef name env defn
+                      (ir, rsi) <- stitchRemoteSchema schemaSampledFeatureFlags storedRawIntrospection rsDef
                       pure (ir, storedRawIntrospection, rsi)
                 case processedIntrospection of
                   Right processed -> do
@@ -93,6 +96,7 @@ buildRemoteSchemas env =
                             ]
                     -- Still record inconsistency to notify the user obout the usage of stored stale data
                     recordInconsistencies -< ((Just $ toJSON (qeInternal upstreamError), [metadataObj]), inconsistencyMessage)
+                    bindA -< unLogger logger $ StoredIntrospectionLog ("Using stored introspection for remote schema " <>> name) upstreamError
                     returnA -< Just processed
                   Left _processError ->
                     -- Unable to process stored introspection, give up and re-throw upstream exception
@@ -198,9 +202,11 @@ buildRemoteSchemaPermissions = proc ((remoteSchemaName, originalIntrospection, o
 
 addRemoteSchemaP2Setup ::
   (QErrM m, MonadIO m, ProvidesNetwork m, Tracing.MonadTrace m) =>
+  RemoteSchemaName ->
   Env.Environment ->
+  SchemaSampledFeatureFlags ->
   RemoteSchemaDef ->
   m (IntrospectionResult, BL.ByteString, RemoteSchemaInfo)
-addRemoteSchemaP2Setup env def = do
-  rsi <- validateRemoteSchemaDef env def
-  fetchRemoteSchema env rsi
+addRemoteSchemaP2Setup name env schemaSampledFeatureFlags def = do
+  rsi <- validateRemoteSchemaDef name env def
+  fetchRemoteSchema env schemaSampledFeatureFlags rsi

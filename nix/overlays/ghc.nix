@@ -1,3 +1,4 @@
+{ nixpkgs }:
 self: super:
 let
   versions = import ../versions.nix { pkgs = super; };
@@ -18,18 +19,9 @@ in
 {
   haskell = super.haskell // {
     compiler = super.haskell.compiler // {
-      ${ghcName} = (versions.ensureVersion super.haskell.compiler.${ghcName}).overrideAttrs (oldAttrs: {
+      ${ghcName} = super.haskell.compiler.${ghcName}.overrideAttrs (oldAttrs: {
         patches = (if oldAttrs ? patches then oldAttrs.patches else [ ]) ++ ghcPatches;
       });
-    };
-
-    packages = super.haskell.packages // {
-      ${ghcName} = super.haskell.packages.${ghcName}.override {
-        overrides = hself: hsuper: {
-          # ghcid tests are broken on GHC 9.4
-          ghcid = super.haskell.lib.dontCheck hsuper.ghcid;
-        };
-      };
     };
   };
 

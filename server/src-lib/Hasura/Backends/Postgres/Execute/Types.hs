@@ -16,6 +16,8 @@ module Hasura.Backends.Postgres.Execute.Types
 
     -- * Execution in a Postgres Source
     PGSourceConfig (..),
+    getConnInfo,
+    mkConnInfoWithFinalizer,
     ConnectionTemplateConfig (..),
     connectionTemplateConfigResolver,
     ConnectionTemplateResolver (..),
@@ -25,7 +27,8 @@ module Hasura.Backends.Postgres.Execute.Types
     pgResolveConnectionTemplate,
     resolvePostgresConnectionTemplate,
     sourceConfigNumReadReplicas,
-    sourceConfigConnectonTemplateEnabled,
+    sourceConfigConnectonTemplate,
+    getPGColValues,
   )
 where
 
@@ -33,21 +36,32 @@ import Control.Lens
 import Control.Monad.Trans.Control (MonadBaseControl (..))
 import Data.Aeson.Extended qualified as J
 import Data.CaseInsensitive qualified as CI
+import Data.Has
 import Data.HashMap.Internal.Strict qualified as Map
+import Data.IORef (IORef)
+import Data.IORef qualified as IORef
 import Data.List.NonEmpty qualified as List.NonEmpty
+import Data.Text.Extended (toTxt)
 import Database.PG.Query qualified as PG
+import Database.PG.Query.Class ()
 import Database.PG.Query.Connection qualified as PG
 import Hasura.Backends.Postgres.Connection.Settings (ConnectionTemplate (..), PostgresConnectionSetMemberName)
 import Hasura.Backends.Postgres.Execute.ConnectionTemplate
+import Hasura.Backends.Postgres.SQL.DML qualified as S
 import Hasura.Backends.Postgres.SQL.Error
+import Hasura.Backends.Postgres.SQL.Types (Identifier (..), PGCol, PGScalarType, QualifiedTable, getPGColTxt)
 import Hasura.Base.Error
 import Hasura.EncJSON (EncJSON, encJFromJValue)
 import Hasura.Prelude
+import Hasura.RQL.IR.BoolExp.RemoteRelationshipPredicate
+import Hasura.RQL.Types.Common (SourceName)
 import Hasura.RQL.Types.ResizePool
 import Hasura.RQL.Types.Roles (adminRoleName)
-import Hasura.SQL.Types (ExtensionsSchema)
-import Hasura.Session (SessionVariables, UserInfo (_uiRole, _uiSession), maybeRoleFromSessionVariables)
+import Hasura.RQL.Types.Session (SessionVariables (..))
+import Hasura.SQL.Types (ExtensionsSchema, toSQL)
+import Hasura.Session (UserInfo (_uiRole, _uiSession), getSessionVariableValue, maybeRoleFromSessionVariables)
 import Kriti.Error qualified as Kriti
+import Kriti.Parser qualified as Kriti
 import Network.HTTP.Types qualified as HTTP
 
 -- See Note [Existentially Quantified Types]
@@ -189,13 +203,13 @@ data ConnectionTemplateConfig
   = -- | Connection templates are disabled for Hasura CE
     ConnTemplate_NotApplicable
   | ConnTemplate_NotConfigured
-  | ConnTemplate_Resolver ConnectionTemplateResolver
+  | ConnTemplate_Resolver Kriti.ValueExt ConnectionTemplateResolver
 
 connectionTemplateConfigResolver :: ConnectionTemplateConfig -> Maybe ConnectionTemplateResolver
 connectionTemplateConfigResolver = \case
   ConnTemplate_NotApplicable -> Nothing
   ConnTemplate_NotConfigured -> Nothing
-  ConnTemplate_Resolver resolver -> Just resolver
+  ConnTemplate_Resolver _template resolver -> Just resolver
 
 -- | A hook to resolve connection template
 newtype ConnectionTemplateResolver = ConnectionTemplateResolver
@@ -211,8 +225,8 @@ newtype ConnectionTemplateResolver = ConnectionTemplateResolver
 
 data PGSourceConfig = PGSourceConfig
   { _pscExecCtx :: PGExecCtx,
-    _pscConnInfo :: PG.ConnInfo,
-    _pscReadReplicaConnInfos :: Maybe (NonEmpty PG.ConnInfo),
+    _pscConnInfo :: ConnInfoWithFinalizer,
+    _pscReadReplicaConnInfos :: Maybe (NonEmpty ConnInfoWithFinalizer),
     _pscPostDropHook :: IO (),
     _pscExtensionsSchema :: ExtensionsSchema,
     _pscConnectionSet :: HashMap PostgresConnectionSetMemberName PG.ConnInfo,
@@ -229,7 +243,43 @@ instance Eq PGSourceConfig where
       == (_pscConnInfo rconf, _pscReadReplicaConnInfos rconf, _pscExtensionsSchema rconf, _pscConnectionSet rconf)
 
 instance J.ToJSON PGSourceConfig where
-  toJSON = J.toJSON . show . _pscConnInfo
+  toJSON = J.toJSON . _pscConnInfo
+
+instance Has () PGSourceConfig where
+  hasLens = united
+
+-- | Get the primary 'PG.ConnInfo' from 'PGSourceConfig'
+getConnInfo :: PGSourceConfig -> PG.ConnInfo
+getConnInfo = _ciwfConnInfo . _pscConnInfo
+
+-- | Wraps a 'PG.ConnInfo' in a weak IORef with a finalizer action. This is used
+-- to perform any finalizer action (like de-registering metrics), when this
+-- connection info is dropped.
+data ConnInfoWithFinalizer = ConnInfoWithFinalizer
+  { -- | Empty value used to attach a finalizer to (internal)
+    _ciwfWeakIORef :: IORef (),
+    -- | The actual Postgres connection info
+    _ciwfConnInfo :: PG.ConnInfo
+  }
+  deriving (Generic)
+
+instance Show ConnInfoWithFinalizer where
+  show _ = "(ConnInfoWithFinalizer <details>)"
+
+instance Eq ConnInfoWithFinalizer where
+  lconf == rconf = _ciwfConnInfo lconf == _ciwfConnInfo rconf
+
+instance J.ToJSON ConnInfoWithFinalizer where
+  toJSON = J.toJSON . show . _ciwfConnInfo
+
+instance Has () ConnInfoWithFinalizer where
+  hasLens = united
+
+mkConnInfoWithFinalizer :: PG.ConnInfo -> IO () -> IO ConnInfoWithFinalizer
+mkConnInfoWithFinalizer connInfo finalizer = do
+  ioref <- IORef.newIORef ()
+  void $ IORef.mkWeakIORef ioref finalizer
+  pure $ ConnInfoWithFinalizer ioref connInfo
 
 runPgSourceReadTx ::
   (MonadIO m, MonadBaseControl IO m) =>
@@ -284,7 +334,7 @@ pgResolveConnectionTemplate sourceConfig (RequestContext (RequestContextHeaders 
           ConnTemplate_NotApplicable -> connectionTemplateNotApplicableError
           ConnTemplate_NotConfigured ->
             throw400 TemplateResolutionFailed "Connection template not defined for the source"
-          ConnTemplate_Resolver resolver ->
+          ConnTemplate_Resolver _template resolver ->
             pure resolver
       Just connectionTemplate ->
         case _pscConnectionTemplateConfig sourceConfig of
@@ -325,9 +375,85 @@ sourceConfigNumReadReplicas :: PGSourceConfig -> Int
 sourceConfigNumReadReplicas =
   maybe 0 List.NonEmpty.length . _pscReadReplicaConnInfos
 
-sourceConfigConnectonTemplateEnabled :: PGSourceConfig -> Bool
-sourceConfigConnectonTemplateEnabled pgSourceConfig =
+sourceConfigConnectonTemplate :: PGSourceConfig -> Maybe Kriti.ValueExt
+sourceConfigConnectonTemplate pgSourceConfig =
   case _pscConnectionTemplateConfig pgSourceConfig of
-    ConnTemplate_NotApplicable -> False
-    ConnTemplate_NotConfigured -> False
-    ConnTemplate_Resolver _ -> True
+    ConnTemplate_NotApplicable -> Nothing
+    ConnTemplate_NotConfigured -> Nothing
+    ConnTemplate_Resolver template _ -> Just template
+
+getPGColValues ::
+  (MonadIO m, MonadError QErr m) =>
+  SessionVariables ->
+  SourceName ->
+  PGSourceConfig ->
+  QualifiedTable ->
+  (PGScalarType, PGCol) ->
+  (PGCol, [RemoteRelSupportedOp RemoteRelSessionVariableORLiteralValue]) ->
+  m [Text]
+getPGColValues sessionVariables _sourceName sourceConfig table col (field, val) = do
+  queryTx <- mkGetPGColValuesQuery sessionVariables table col field val
+  res <- liftIO $ runPgSourceReadTx sourceConfig queryTx
+  onLeft ((fmap runIdentity) <$> res) throwError
+
+mkGetPGColValuesQuery :: (PG.FromCol a, MonadError QErr m) => SessionVariables -> QualifiedTable -> (PGScalarType, PGCol) -> PGCol -> [RemoteRelSupportedOp RemoteRelSessionVariableORLiteralValue] -> m (PG.TxET QErr IO [(Identity a)])
+mkGetPGColValuesQuery sessionVariables table (_colType, col) fieldName boolExps = do
+  let columnName = getPGColTxt col
+  boolExp <- traverse getBoolExp boolExps
+  let whereExpFrag = S.WhereFrag $ S.BEBin S.AndOp (S.BELit True) (foldl' (S.BEBin S.AndOp) (S.BELit True) boolExp)
+  pure
+    $ PG.withQE
+      defaultTxErrorHandler
+      ( PG.fromBuilder
+          ( toSQL
+              ( S.mkSelect
+                  { S.selExtr = [S.Extractor (S.SETyAnn (S.SEIdentifier (Identifier columnName)) (S.textTypeAnn)) Nothing],
+                    S.selFrom = Just $ S.mkSimpleFromExp table,
+                    S.selWhere = Just whereExpFrag
+                  }
+              )
+          )
+      )
+      ()
+      True
+  where
+    getSessionVariableValueM :: (MonadError QErr m) => RemoteRelSessionVariableORLiteralValue -> m Text
+    getSessionVariableValueM (RemoteRelSessionVariable sessionVariable) = onNothing (getSessionVariableValue sessionVariable sessionVariables) (throw400 NotFound $ "Session variable " <> toTxt sessionVariable <> " not found")
+    getSessionVariableValueM (RemoteRelLiteralValue value) = pure value
+
+    getBoolExp :: (MonadError QErr m) => RemoteRelSupportedOp RemoteRelSessionVariableORLiteralValue -> m S.BoolExp
+    getBoolExp = \case
+      RemoteRelEqOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SEQ (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelNeqOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SNE (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelGtOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SGT (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelLtOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SLT (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelGteOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SGTE (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelLteOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SLTE (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelInOp lst -> do
+        actualValues <- traverse getSessionVariableValueM lst
+        pure $ S.BEIN (S.SEIdentifier (Identifier fieldNameText)) (map S.SELit actualValues)
+      RemoteRelNinOp lst -> do
+        actualValues <- traverse getSessionVariableValueM lst
+        pure $ S.BENot $ S.BEIN (S.SEIdentifier (Identifier fieldNameText)) (map S.SELit actualValues)
+      RemoteRelLikeOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SLIKE (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelNlikeOp sessionVariableOrLiteralValue -> do
+        actualValue <- getSessionVariableValueM sessionVariableOrLiteralValue
+        pure $ S.BECompare S.SNLIKE (S.SEIdentifier (Identifier fieldNameText)) (S.SELit actualValue)
+      RemoteRelIsNullOp True -> pure $ S.BENull (S.SEIdentifier (Identifier fieldNameText))
+      RemoteRelIsNullOp False -> pure $ S.BENotNull (S.SEIdentifier (Identifier fieldNameText))
+      where
+        fieldNameText = getPGColTxt fieldName

@@ -22,7 +22,6 @@ import Harness.Logging.Messages
 import Harness.Services.Composed qualified as Services
 import Harness.Test.BackendType
 import Hasura.Prelude
-import Network.WebSockets qualified as WS
 
 -- | static information across an entire test suite run
 data GlobalTestEnvironment = GlobalTestEnvironment
@@ -51,10 +50,6 @@ instance Has Services.HgeBinPath GlobalTestEnvironment where
   getter = getter . getter @Services.TestServicesConfig
   modifier f = modifier (modifier @_ @Services.TestServicesConfig f)
 
-instance Has Services.DcPgBinPath GlobalTestEnvironment where
-  getter = getter . getter @Services.TestServicesConfig
-  modifier f = modifier (modifier @_ @Services.TestServicesConfig f)
-
 instance Has Services.PostgresServerUrl GlobalTestEnvironment where
   getter = getter . getter @Services.TestServicesConfig
   modifier f = modifier (modifier @_ @Services.TestServicesConfig f)
@@ -78,17 +73,13 @@ instance Has Services.HgeServerInstance GlobalTestEnvironment where
 
   modifier = error "GlobalTestEnvironment does not support modifying HgeServerInstance"
 
-instance Has Services.DcPgPool GlobalTestEnvironment where
-  getter = getter . getter @Services.TestServicesConfig
-  modifier f = modifier (modifier @_ @Services.TestServicesConfig f)
-
 instance Show GlobalTestEnvironment where
   show GlobalTestEnvironment {server} =
     "<GlobalTestEnvironment: " ++ urlPrefix server ++ ":" ++ show (port server) ++ " >"
 
 -- | How should we make requests to `graphql-engine`? Both WebSocket- and HTTP-
 -- based requests are supported.
-data Protocol = HTTP | WebSocket WS.Connection
+data Protocol = HTTP | WebSocket
 
 -- | Credentials for our testing modes. See 'SpecHook.setupTestingMode' for the
 -- practical consequences of this type.

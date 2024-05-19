@@ -14,7 +14,7 @@ set -o pipefail
 
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
-DATABASES=(postgres citus sqlserver sqlserver-healthcheck)
+DATABASES=(postgres citus sqlserver)
 
 (
   cd ../..
@@ -29,12 +29,6 @@ DATABASES=(postgres citus sqlserver sqlserver-healthcheck)
 # shellcheck disable=SC1091
 source .hasura-dev-python-venv/bin/activate
 
-# Use the Azure SQL Edge image instead of the SQL Server image on arm64.
-# The latter doesn't work yet.
-if [[ "$(uname -m)" == 'arm64' ]]; then
-  export MSSQL_IMAGE='mcr.microsoft.com/azure-sql-edge'
-fi
-
 echo
 echo '*** Starting databases ***'
 docker compose up -d --wait "${DATABASES[@]}"
@@ -47,6 +41,7 @@ export HASURA_GRAPHQL_PG_SOURCE_URL_1 HASURA_GRAPHQL_PG_SOURCE_URL_2 HASURA_GRAP
 
 echo
 echo '*** Running tests ***'
+export SQLALCHEMY_SILENCE_UBER_WARNING=1 # disable warnings about upgrading to SQLAlchemy 2.0
 pytest \
   --dist=loadscope \
   -n auto \

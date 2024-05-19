@@ -7,6 +7,8 @@ import { PermissionsSchema } from '../../schema';
 import { areTablesEqual } from '../../../hasura-metadata-api';
 import { Table } from '../../../hasura-metadata-types';
 import { getTableDisplayName } from '../../../DatabaseRelationships';
+import { inputValidationSchema } from '../../../../components/Services/Data/TablePermissions/InputValidation/InputValidation';
+import { z } from 'zod';
 
 const formatFilterValues = (formFilter: Record<string, any>[] = []) => {
   return Object.entries(formFilter).reduce<Record<string, any>>(
@@ -28,6 +30,7 @@ const formatFilterValues = (formFilter: Record<string, any>[] = []) => {
 
 type SelectPermissionMetadata = {
   columns: string[];
+  computed_fields: string[];
   set: Record<string, any>;
   filter: Record<string, any>;
   allow_aggregations?: boolean;
@@ -41,12 +44,16 @@ const createSelectObject = (input: PermissionsSchema) => {
     const columns = Object.entries(input.columns)
       .filter(({ 1: value }) => value)
       .map(([key]) => key);
+    const computed_fields = Object.entries(input.computed_fields)
+      .filter(({ 1: value }) => value)
+      .map(([key]) => key);
 
     // Input may be undefined
     const filter = formatFilterValues(input.filter);
 
     const permissionObject: SelectPermissionMetadata = {
       columns,
+      computed_fields,
       filter,
       set: {},
       allow_aggregations: input.aggregationEnabled,
@@ -76,6 +83,7 @@ type InsertPermissionMetadata = {
   allow_upsert: boolean;
   backend_only?: boolean;
   set: Record<string, any>;
+  validate_input?: z.infer<typeof inputValidationSchema>;
 };
 
 const createInsertObject = (input: PermissionsSchema) => {
@@ -96,6 +104,7 @@ const createInsertObject = (input: PermissionsSchema) => {
       allow_upsert: true,
       set,
       backend_only: input.backendOnly,
+      validate_input: input.validateInput,
     };
 
     return permissionObject;
@@ -133,6 +142,7 @@ type UpdatePermissionMetadata = {
   check?: Record<string, any>; // check is POST
   backend_only?: boolean;
   set: Record<string, any>;
+  validate_input?: z.infer<typeof inputValidationSchema>;
 };
 
 const createUpdateObject = (input: PermissionsSchema) => {
@@ -162,6 +172,7 @@ const createUpdateObject = (input: PermissionsSchema) => {
       check,
       set,
       backend_only: input.backendOnly,
+      validate_input: input.validateInput,
     };
 
     return permissionObject;
@@ -284,6 +295,7 @@ export const createInsertArgs = ({
         role,
         permission,
         source: dataSourceName,
+        comment: formData.comment,
       },
     },
   ];
@@ -352,6 +364,7 @@ export const createInsertArgs = ({
             role: clonedPermission.roleName || '',
             permission: permissionWithColumnsAndPresetsRemoved,
             source: dataSourceName,
+            comment: '',
           },
         });
 

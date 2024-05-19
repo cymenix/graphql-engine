@@ -49,7 +49,6 @@ import {
   updateRequestHeaders,
   showErrorNotification,
   isMonitoringTabSupportedEnvironment,
-  isCloudConsole,
   ControlPlane,
 } from '@hasura/console-legacy-ce';
 
@@ -92,7 +91,12 @@ import logo from './images/white-logo.svg';
 import logoutIcon from './images/log-out.svg';
 import EELogo from './images/hasura-ee-mono-light.svg';
 import { isHasuraCollaboratorUser } from '../Login/utils';
-import { ConsoleDevTools } from '@hasura/console-legacy-ce';
+import {
+  ConsoleDevTools,
+  isFeatureFlagEnabled,
+  availableFeatureFlagIds,
+} from '@hasura/console-legacy-ce';
+import { getAdminSecret } from '../AppState';
 
 const { Plan, Project_Entitlement_Types_Enum } = ControlPlane;
 class Main extends React.Component {
@@ -314,11 +318,6 @@ class Main extends React.Component {
    * check if entitlement is enabled for such plans
    */
   hasMetricsEntitlement() {
-    // if not a cloud console, don't check
-    if (!isCloudConsole(globals)) {
-      return true;
-    }
-
     // get the plan name and entitlements array from the project
     const {
       project: { plan_name = '' },
@@ -440,6 +439,12 @@ class Main extends React.Component {
     };
 
     const getDataPath = () => {
+      const perfMode = isFeatureFlagEnabled(
+        availableFeatureFlagIds.performanceMode
+      );
+
+      if (perfMode) return 'data/';
+
       if (currentSource && currentSchema) {
         return `data/${currentSource}/schema/${currentSchema}`;
       }
@@ -447,26 +452,37 @@ class Main extends React.Component {
     };
 
     const renderMetricsTab = () => {
-      if (
-        'hasMetricAccess' in accessState &&
-        accessState.hasMetricAccess &&
-        isMonitoringTabSupportedEnvironment(globals) &&
-        (isCloudConsole(globals) || isHasuraCollaboratorUser()) &&
-        this.hasMetricsEntitlement()
-      ) {
-        return (
-          <HeaderNavItem
-            title="Monitoring"
-            icon={<FaChartLine aria-hidden="true" />}
-            tooltipText="Metrics"
-            itemPath={moduleName}
-            linkPath={relativeModulePath}
-            appPrefix={appPrefix}
-            currentActiveBlock={currentActiveBlock}
-          />
-        );
+      if (!isMonitoringTabSupportedEnvironment(globals)) {
+        return null;
       }
-      return null;
+
+      if (globals.consoleType === 'pro') {
+        if (
+          // still show the monitoring tab if the user login with admin secret
+          (!getAdminSecret() && !isHasuraCollaboratorUser()) ||
+          !accessState?.hasMetricAccess
+        ) {
+          return null;
+        }
+        // validate metrics permission for hasura cloud
+      } else if (
+        !accessState?.hasMetricAccess ||
+        !this.hasMetricsEntitlement()
+      ) {
+        return null;
+      }
+
+      return (
+        <HeaderNavItem
+          title="Monitoring"
+          icon={<FaChartLine aria-hidden="true" />}
+          tooltipText="Metrics"
+          itemPath={moduleName}
+          linkPath={relativeModulePath}
+          appPrefix={appPrefix}
+          currentActiveBlock={currentActiveBlock}
+        />
+      );
     };
 
     const renderLogout = () => {

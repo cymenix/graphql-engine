@@ -1,8 +1,7 @@
-import React from 'react';
 import { BsDatabaseFillGear } from 'react-icons/bs';
 import { FaRegTrashAlt } from 'react-icons/fa';
 import { GrTableAdd } from 'react-icons/gr';
-import { MdOutlineCreateNewFolder } from 'react-icons/md';
+import { MdEditNote, MdOutlineCreateNewFolder } from 'react-icons/md';
 import { DropDown } from '../../../../new-components/AdvancedDropDown';
 import {
   useDestructiveAlert,
@@ -10,6 +9,7 @@ import {
 } from '../../../../new-components/Alert';
 import { Button } from '../../../../new-components/Button';
 import { usePushRoute } from '../../../ConnectDBRedesign/hooks/usePushRoute';
+import { MetadataSelectors, useMetadata } from '../../../hasura-metadata-api';
 import {
   useCreateDatabaseSchema,
   useDeleteDatabaseSchema,
@@ -34,6 +34,10 @@ export function SchemaDropdown({
     useDeleteDatabaseSchema({
       dataSourceName,
     })
+  );
+
+  const { data: source, isSuccess } = useMetadata(
+    MetadataSelectors.findSource(dataSourceName)
   );
 
   const push = usePushRoute();
@@ -83,10 +87,6 @@ export function SchemaDropdown({
     });
   };
 
-  const handlePermissionsSummary = (schema: string) => {
-    push(`data/${dataSourceName}/schema/${schema}/permissions`);
-  };
-
   const handleCreateTable = (schema: string) => {
     push(`data/${dataSourceName}/schema/${schema}/table/add`);
   };
@@ -97,6 +97,24 @@ export function SchemaDropdown({
         <Button size="sm" className="mr-2" icon={<BsDatabaseFillGear />} />
       }
     >
+      {isSuccess && source?.kind && (
+        <>
+          <DropDown.Label>Connection</DropDown.Label>
+          <DropDown.BasicItem
+            link
+            onClick={() =>
+              push(
+                `data/v2/manage/database/edit?driver=${source.kind}&database=${dataSourceName}`
+              )
+            }
+          >
+            <div className="flex gap-3 items-center">
+              <MdEditNote className="text-subtitle" />
+              Edit Connection
+            </div>
+          </DropDown.BasicItem>
+        </>
+      )}
       <DropDown.Label>Schemas</DropDown.Label>
       <DropDown.BasicItem link onClick={handleCreateSchema}>
         <div className="flex gap-3 items-center">
@@ -123,17 +141,7 @@ export function SchemaDropdown({
           </DropDown.BasicItem>
         ))}
       </DropDown.SubMenu>
-      <DropDown.SubMenu label="Permissions Summary">
-        <DropDown.Label>Choose Schema To View...</DropDown.Label>
-        {schemas.map(name => (
-          <DropDown.BasicItem
-            onClick={() => handlePermissionsSummary(name)}
-            key={name}
-          >
-            {name}
-          </DropDown.BasicItem>
-        ))}
-      </DropDown.SubMenu>
+
       <DropDown.Label>Tables</DropDown.Label>
       <DropDown.SubMenu
         label={

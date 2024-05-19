@@ -37,6 +37,7 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
     let getAlbumsByArtistId artistId =
           _tdAlbumsRows
             & filter (\album -> album ^? Data.field "ArtistId" . Data._ColumnFieldNumber == Just artistId)
+            & sortOn (^? Data.field "AlbumId")
 
     let expectedForeachResponseRows =
           mkForeachResponseRows
@@ -92,6 +93,7 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
                   album ^? Data.field "ArtistId" . Data._ColumnFieldNumber == Just artistId
                     && album ^? Data.field "Title" . Data._ColumnFieldString `elem` (Just <$> albumTitles)
               )
+            & sortOn (^? Data.field "AlbumId")
 
     let expectedForeachResponseRows =
           mkForeachResponseRows
@@ -179,7 +181,7 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
             albumsQueryRequest
               & qrForeach ?~ foreachIds
               -- Add the Artist object relationship field
-              & qrQuery %~ (qFields . _Just . Data.fieldAt "Artist" ?~ RelField (RelationshipField _tdArtistRelationshipName artistsQuery))
+              & qrQuery . qFields . _Just . Data.fieldAt "Artist" ?~ RelField (RelationshipField _tdArtistRelationshipName artistsQuery)
               & qrRelationships .~ Set.fromList [API.RTable $ Data.onlyKeepRelationships [_tdArtistRelationshipName] _tdAlbumsTableRelationships]
       receivedForeachResponse <- queryGuarded query
 
@@ -191,6 +193,7 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
       let getAlbumsByArtistId artistId =
             _tdAlbumsRows
               & filter (\album -> album ^? Data.field "ArtistId" . Data._ColumnFieldNumber == Just artistId)
+              & sortOn (^? Data.field "AlbumId")
               & fmap joinInArtist
 
       let expectedForeachResponseRows =
@@ -212,7 +215,7 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
             albumsQueryRequest
               & qrForeach ?~ foreachIds
               -- Add the Tracks array relationship field
-              & qrQuery %~ (qFields . _Just . Data.fieldAt "Tracks" ?~ RelField (RelationshipField _tdTracksRelationshipName tracksQuery))
+              & qrQuery . qFields . _Just . Data.fieldAt "Tracks" ?~ RelField (RelationshipField _tdTracksRelationshipName tracksQuery)
               & qrRelationships .~ Set.fromList [API.RTable $ Data.onlyKeepRelationships [_tdTracksRelationshipName] _tdAlbumsTableRelationships]
       receivedForeachResponse <- queryGuarded query
 
@@ -225,6 +228,7 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
       let getAlbumsByArtistId artistId =
             _tdAlbumsRows
               & filter (\album -> album ^? Data.field "ArtistId" . Data._ColumnFieldNumber == Just artistId)
+              & sortOn (^? Data.field "AlbumId")
               & fmap joinInTracks
 
       let expectedForeachResponseRows =
@@ -250,14 +254,18 @@ spec TestData {..} Capabilities {..} = describe "Foreach Queries" $ do
     albumsQueryRequest :: QueryRequest
     albumsQueryRequest =
       let fields = Data.mkFieldsMap [("AlbumId", _tdColumnField _tdAlbumsTableName "AlbumId"), ("ArtistId", _tdColumnField _tdAlbumsTableName "ArtistId"), ("Title", _tdColumnField _tdAlbumsTableName "Title")]
-          query = Data.emptyQuery & qFields ?~ fields
-       in TableQueryRequest _tdAlbumsTableName mempty query Nothing
+          orderBy = OrderBy mempty $ _tdOrderByColumn [] "AlbumId" Ascending :| []
+          query =
+            Data.emptyQuery
+              & qFields ?~ fields
+              & qOrderBy ?~ orderBy
+       in TableQueryRequest _tdAlbumsTableName mempty mempty mempty query Nothing
 
     playlistTracksQueryRequest :: QueryRequest
     playlistTracksQueryRequest =
       let fields = Data.mkFieldsMap [("PlaylistId", _tdColumnField _tdPlaylistTracksTableName "PlaylistId"), ("TrackId", _tdColumnField _tdPlaylistTracksTableName "TrackId")]
           query = Data.emptyQuery & qFields ?~ fields
-       in TableQueryRequest _tdPlaylistTracksTableName mempty query Nothing
+       in TableQueryRequest _tdPlaylistTracksTableName mempty mempty mempty query Nothing
 
     mkForeachIds :: TableName -> [(Text, J.Value)] -> HashMap ColumnName ScalarValue
     mkForeachIds tableName =

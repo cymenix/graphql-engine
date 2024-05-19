@@ -664,6 +664,9 @@
                     },
                     "filter": {
                         "$ref": "#/components/schemas/BigqueryBoolExp"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -745,6 +748,9 @@
                             "additionalProperties": true
                         },
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -847,7 +853,7 @@
                     "array_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig__BigQuery"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig__BigQuery"
                         },
                         "type": "array"
                     },
@@ -862,13 +868,13 @@
                     "object_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig__BigQuery"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig__BigQuery"
                         },
                         "type": "array"
                     },
                     "returns": {
-                        "description": "Return type (table) of the expression",
-                        "type": "string"
+                        "additionalProperties": true,
+                        "description": "Return type (table) of the expression\nA name or definition of a Logical Model\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     },
                     "root_field_name": {
                         "description": "Root field name for the native query",
@@ -895,7 +901,8 @@
                         "type": "boolean"
                     },
                     "type": {
-                        "$ref": "#/components/schemas/ScalarType"
+                        "additionalProperties": true,
+                        "description": "The base scalar type\nA scalar type for BigQuery\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     }
                 },
                 "required": [
@@ -939,7 +946,15 @@
             "BigqueryRUManual": {
                 "properties": {
                     "manual_configuration": {
-                        "$ref": "#/components/schemas/BigqueryRelManualTableConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/BigqueryRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/BigqueryRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -950,10 +965,21 @@
             "BigqueryRelManualNativeQueryConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -976,10 +1002,21 @@
             "BigqueryRelManualTableConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -1260,6 +1297,10 @@
                         "default": false,
                         "type": "boolean"
                     },
+                    "logical_model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
                     "object_relationships": {
                         "default": [],
                         "items": {
@@ -1332,6 +1373,9 @@
                         },
                         "description": "Preset columns",
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -1504,6 +1548,9 @@
                     },
                     "filter": {
                         "$ref": "#/components/schemas/CitusBoolExp"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -1688,6 +1735,9 @@
                             "additionalProperties": true
                         },
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -1790,7 +1840,7 @@
                     "array_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig___Postgres__Citus_"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig___Postgres__Citus_"
                         },
                         "type": "array"
                     },
@@ -1805,13 +1855,13 @@
                     "object_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig___Postgres__Citus_"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig___Postgres__Citus_"
                         },
                         "type": "array"
                     },
                     "returns": {
-                        "description": "Return type (table) of the expression",
-                        "type": "string"
+                        "additionalProperties": true,
+                        "description": "Return type (table) of the expression\nA name or definition of a Logical Model\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     },
                     "root_field_name": {
                         "description": "Root field name for the native query",
@@ -1899,7 +1949,15 @@
             "CitusRUManual": {
                 "properties": {
                     "manual_configuration": {
-                        "$ref": "#/components/schemas/CitusRelManualTableConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/CitusRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/CitusRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -1910,10 +1968,21 @@
             "CitusRelManualNativeQueryConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -1936,10 +2005,21 @@
             "CitusRelManualTableConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -2287,6 +2367,10 @@
                         "default": false,
                         "type": "boolean"
                     },
+                    "logical_model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
                     "object_relationships": {
                         "default": [],
                         "items": {
@@ -2384,6 +2468,9 @@
                         },
                         "description": "Preset columns",
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -2491,6 +2578,9 @@
                     },
                     "filter": {
                         "$ref": "#/components/schemas/CockroachBoolExp"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -2675,6 +2765,9 @@
                             "additionalProperties": true
                         },
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -2777,7 +2870,7 @@
                     "array_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig___Postgres__Cockroach_"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig___Postgres__Cockroach_"
                         },
                         "type": "array"
                     },
@@ -2792,13 +2885,13 @@
                     "object_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig___Postgres__Cockroach_"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig___Postgres__Cockroach_"
                         },
                         "type": "array"
                     },
                     "returns": {
-                        "description": "Return type (table) of the expression",
-                        "type": "string"
+                        "additionalProperties": true,
+                        "description": "Return type (table) of the expression\nA name or definition of a Logical Model\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     },
                     "root_field_name": {
                         "description": "Root field name for the native query",
@@ -2886,7 +2979,15 @@
             "CockroachRUManual": {
                 "properties": {
                     "manual_configuration": {
-                        "$ref": "#/components/schemas/CockroachRelManualTableConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/CockroachRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/CockroachRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -2897,10 +2998,21 @@
             "CockroachRelManualNativeQueryConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -2923,10 +3035,21 @@
             "CockroachRelManualTableConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -3274,6 +3397,10 @@
                         "default": false,
                         "type": "boolean"
                     },
+                    "logical_model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
                     "object_relationships": {
                         "default": [],
                         "items": {
@@ -3371,6 +3498,9 @@
                         },
                         "description": "Preset columns",
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -3590,6 +3720,12 @@
                     "template": {
                         "type": "string"
                     },
+                    "template_variables": {
+                        "additionalProperties": {
+                            "$ref": "#/components/schemas/TemplateVariableSource"
+                        },
+                        "type": "object"
+                    },
                     "timeout": {
                         "oneOf": [
                             {
@@ -3618,7 +3754,14 @@
                         "type": "string"
                     },
                     "uri": {
-                        "type": "string"
+                        "oneOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "$ref": "#/components/schemas/FromEnv"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -3663,7 +3806,17 @@
                 "properties": {
                     "columns": {
                         "items": {
-                            "type": "string"
+                            "oneOf": [
+                                {
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "type": "array"
+                                },
+                                {
+                                    "type": "string"
+                                }
+                            ]
                         },
                         "type": "array"
                     },
@@ -3683,7 +3836,17 @@
             "DataconnectorArrRelUsingFKeyOnSingleColumn": {
                 "properties": {
                     "column": {
-                        "type": "string"
+                        "oneOf": [
+                            {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            {
+                                "type": "string"
+                            }
+                        ]
                     },
                     "table": {
                         "items": {
@@ -3732,6 +3895,9 @@
                     },
                     "filter": {
                         "$ref": "#/components/schemas/DataconnectorBoolExp"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -3817,6 +3983,9 @@
                             "additionalProperties": true
                         },
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -3919,7 +4088,7 @@
                     "array_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig__DataConnector"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig__DataConnector"
                         },
                         "type": "array"
                     },
@@ -3934,13 +4103,13 @@
                     "object_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig__DataConnector"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig__DataConnector"
                         },
                         "type": "array"
                     },
                     "returns": {
-                        "description": "Return type (table) of the expression",
-                        "type": "string"
+                        "additionalProperties": true,
+                        "description": "Return type (table) of the expression\nA name or definition of a Logical Model\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     },
                     "root_field_name": {
                         "description": "Root field name for the native query",
@@ -3979,7 +4148,17 @@
                 "properties": {
                     "columns": {
                         "items": {
-                            "type": "string"
+                            "oneOf": [
+                                {
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "type": "array"
+                                },
+                                {
+                                    "type": "string"
+                                }
+                            ]
                         },
                         "type": "array"
                     },
@@ -3999,7 +4178,17 @@
             "DataconnectorObjRelRemoteTableSingleColumn": {
                 "properties": {
                     "column": {
-                        "type": "string"
+                        "oneOf": [
+                            {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            {
+                                "type": "string"
+                            }
+                        ]
                     },
                     "table": {
                         "items": {
@@ -4017,7 +4206,15 @@
             "DataconnectorRUManual": {
                 "properties": {
                     "manual_configuration": {
-                        "$ref": "#/components/schemas/DataconnectorRelManualTableConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/DataconnectorRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/DataconnectorRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -4028,10 +4225,41 @@
             "DataconnectorRelManualNativeQueryConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "oneOf": [
+                                        {
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "type": "array"
+                                        },
+                                        {
+                                            "type": "string"
+                                        }
+                                    ]
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "oneOf": [
+                                        {
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "type": "array"
+                                        },
+                                        {
+                                            "type": "string"
+                                        }
+                                    ]
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -4054,10 +4282,41 @@
             "DataconnectorRelManualTableConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "oneOf": [
+                                        {
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "type": "array"
+                                        },
+                                        {
+                                            "type": "string"
+                                        }
+                                    ]
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "oneOf": [
+                                        {
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "type": "array"
+                                        },
+                                        {
+                                            "type": "string"
+                                        }
+                                    ]
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -4350,6 +4609,10 @@
                         "default": false,
                         "type": "boolean"
                     },
+                    "logical_model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
                     "object_relationships": {
                         "default": [],
                         "items": {
@@ -4425,6 +4688,9 @@
                         },
                         "description": "Preset columns",
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -4918,8 +5184,26 @@
                             }
                         ]
                     },
+                    "isolation_level": {
+                        "default": "read-committed",
+                        "description": "The transaction isolation level in which the queries made to the source will be run with (default: read-committed).\nIsolation level",
+                        "type": "string"
+                    },
                     "pool_settings": {
-                        "$ref": "#/components/schemas/MSSQLPoolSettings"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "enum": [
+                                    {
+                                        "enable": false
+                                    }
+                                ],
+                                "type": "object"
+                            },
+                            {
+                                "$ref": "#/components/schemas/MSSQLPoolSettings"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -5297,6 +5581,9 @@
                     },
                     "filter": {
                         "$ref": "#/components/schemas/MssqlBoolExp"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -5481,6 +5768,9 @@
                             "additionalProperties": true
                         },
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -5583,7 +5873,7 @@
                     "array_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig__MSSQL"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig__MSSQL"
                         },
                         "type": "array"
                     },
@@ -5598,13 +5888,13 @@
                     "object_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig__MSSQL"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig__MSSQL"
                         },
                         "type": "array"
                     },
                     "returns": {
-                        "description": "Return type (table) of the expression",
-                        "type": "string"
+                        "additionalProperties": true,
+                        "description": "Return type (table) of the expression\nA name or definition of a Logical Model\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     },
                     "root_field_name": {
                         "description": "Root field name for the native query",
@@ -5691,7 +5981,15 @@
             "MssqlRUManual": {
                 "properties": {
                     "manual_configuration": {
-                        "$ref": "#/components/schemas/MssqlRelManualTableConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/MssqlRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/MssqlRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -5702,10 +6000,21 @@
             "MssqlRelManualNativeQueryConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -5728,10 +6037,21 @@
             "MssqlRelManualTableConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -6079,6 +6399,10 @@
                         "default": false,
                         "type": "boolean"
                     },
+                    "logical_model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
                     "object_relationships": {
                         "default": [],
                         "items": {
@@ -6176,6 +6500,9 @@
                         },
                         "description": "Preset columns",
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -6280,7 +6607,9 @@
                         "default": [],
                         "items": {
                             "enum": [
-                                "traces"
+                                "traces",
+                                "metrics",
+                                "logs"
                             ],
                             "type": "string"
                         },
@@ -6291,10 +6620,6 @@
                     },
                     "status": {
                         "default": "disabled",
-                        "enum": [
-                            "enabled",
-                            "disabled"
-                        ],
                         "type": "string"
                     }
                 },
@@ -6329,6 +6654,14 @@
                         },
                         "type": "array"
                     },
+                    "otlp_logs_endpoint": {
+                        "description": "Target URL to which the exporter is going to send logs. No default.",
+                        "type": "string"
+                    },
+                    "otlp_metrics_endpoint": {
+                        "description": "Target URL to which the exporter is going to send metrics. No default.",
+                        "type": "string"
+                    },
                     "otlp_traces_endpoint": {
                         "description": "Target URL to which the exporter is going to send traces. No default.",
                         "type": "string"
@@ -6346,6 +6679,21 @@
                         "description": "Attributes to send as the resource attributes of an export request. We currently only support string-valued attributes.",
                         "items": {
                             "$ref": "#/components/schemas/OtelNameValue"
+                        },
+                        "type": "array"
+                    },
+                    "traces_propagators": {
+                        "default": [
+                            "b3"
+                        ],
+                        "description": "List of propagators to inject and extract traces data from headers.",
+                        "items": {
+                            "description": "Possible trace propagators to use with OTLP",
+                            "enum": [
+                                "b3",
+                                "tracecontext"
+                            ],
+                            "type": "string"
                         },
                         "type": "array"
                     }
@@ -6558,6 +6906,9 @@
                     },
                     "filter": {
                         "$ref": "#/components/schemas/PostgresBoolExp"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -6742,6 +7093,9 @@
                             "additionalProperties": true
                         },
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -6844,7 +7198,7 @@
                     "array_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig___Postgres__Vanilla_"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig___Postgres__Vanilla_"
                         },
                         "type": "array"
                     },
@@ -6859,13 +7213,13 @@
                     "object_relationships": {
                         "default": [],
                         "items": {
-                            "$ref": "#/components/schemas/RelDef_RelManualNativeQueryConfig___Postgres__Vanilla_"
+                            "$ref": "#/components/schemas/RelDef_RelManualConfig___Postgres__Vanilla_"
                         },
                         "type": "array"
                     },
                     "returns": {
-                        "description": "Return type (table) of the expression",
-                        "type": "string"
+                        "additionalProperties": true,
+                        "description": "Return type (table) of the expression\nA name or definition of a Logical Model\nvalue with unspecified type - this is a placeholder that will eventually be replaced with a more detailed description"
                     },
                     "root_field_name": {
                         "description": "Root field name for the native query",
@@ -7028,7 +7382,15 @@
             "PostgresRUManual": {
                 "properties": {
                     "manual_configuration": {
-                        "$ref": "#/components/schemas/PostgresRelManualTableConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/PostgresRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/PostgresRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -7039,10 +7401,21 @@
             "PostgresRelManualNativeQueryConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -7065,10 +7438,21 @@
             "PostgresRelManualTableConfig": {
                 "properties": {
                     "column_mapping": {
-                        "additionalProperties": {
-                            "type": "string"
-                        },
-                        "type": "object"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            },
+                            {
+                                "additionalProperties": {
+                                    "type": "string"
+                                },
+                                "type": "object"
+                            }
+                        ]
                     },
                     "insertion_order": {
                         "enum": [
@@ -7190,7 +7574,7 @@
                 "description": "https://hasura.io/docs/latest/graphql/core/api-reference/syntax-defs.html#pgsourceconnectioninfo",
                 "properties": {
                     "database_url": {
-                        "description": "The database connection URL as a string, as an environment variable, or as connection parameters.",
+                        "description": "The database connection URL as a string, from an environment variable, as connection parameters, or dynamically read from a file at connect time.",
                         "oneOf": [
                             {
                                 "type": "string"
@@ -7455,6 +7839,10 @@
                         "default": false,
                         "type": "boolean"
                     },
+                    "logical_model": {
+                        "nullable": true,
+                        "type": "string"
+                    },
                     "object_relationships": {
                         "default": [],
                         "items": {
@@ -7552,6 +7940,9 @@
                         },
                         "description": "Preset columns",
                         "type": "object"
+                    },
+                    "validate_input": {
+                        "$ref": "#/components/schemas/ValidateInputInputWebhook"
                     }
                 },
                 "required": [
@@ -7758,11 +8149,27 @@
                     "foreign_key_constraint_on": {
                         "oneOf": [
                             {
+                                "items": {
+                                    "type": "string"
+                                },
+                                "type": "array"
+                            },
+                            {
                                 "type": "string"
                             },
                             {
                                 "items": {
-                                    "type": "string"
+                                    "oneOf": [
+                                        {
+                                            "items": {
+                                                "type": "string"
+                                            },
+                                            "type": "array"
+                                        },
+                                        {
+                                            "type": "string"
+                                        }
+                                    ]
                                 },
                                 "type": "array"
                             },
@@ -7919,7 +8326,7 @@
                 ],
                 "type": "object"
             },
-            "RelDef_RelManualNativeQueryConfig__BigQuery": {
+            "RelDef_RelManualConfig__BigQuery": {
                 "properties": {
                     "comment": {
                         "type": "string"
@@ -7928,7 +8335,15 @@
                         "type": "string"
                     },
                     "using": {
-                        "$ref": "#/components/schemas/BigqueryRelManualNativeQueryConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/BigqueryRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/BigqueryRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -7937,7 +8352,7 @@
                 ],
                 "type": "object"
             },
-            "RelDef_RelManualNativeQueryConfig__DataConnector": {
+            "RelDef_RelManualConfig__DataConnector": {
                 "properties": {
                     "comment": {
                         "type": "string"
@@ -7946,7 +8361,15 @@
                         "type": "string"
                     },
                     "using": {
-                        "$ref": "#/components/schemas/DataconnectorRelManualNativeQueryConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/DataconnectorRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/DataconnectorRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -7955,7 +8378,7 @@
                 ],
                 "type": "object"
             },
-            "RelDef_RelManualNativeQueryConfig__MSSQL": {
+            "RelDef_RelManualConfig__MSSQL": {
                 "properties": {
                     "comment": {
                         "type": "string"
@@ -7964,7 +8387,15 @@
                         "type": "string"
                     },
                     "using": {
-                        "$ref": "#/components/schemas/MssqlRelManualNativeQueryConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/MssqlRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/MssqlRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -7973,7 +8404,7 @@
                 ],
                 "type": "object"
             },
-            "RelDef_RelManualNativeQueryConfig___Postgres__Citus_": {
+            "RelDef_RelManualConfig___Postgres__Citus_": {
                 "properties": {
                     "comment": {
                         "type": "string"
@@ -7982,7 +8413,15 @@
                         "type": "string"
                     },
                     "using": {
-                        "$ref": "#/components/schemas/CitusRelManualNativeQueryConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/CitusRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/CitusRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -7991,7 +8430,7 @@
                 ],
                 "type": "object"
             },
-            "RelDef_RelManualNativeQueryConfig___Postgres__Cockroach_": {
+            "RelDef_RelManualConfig___Postgres__Cockroach_": {
                 "properties": {
                     "comment": {
                         "type": "string"
@@ -8000,7 +8439,15 @@
                         "type": "string"
                     },
                     "using": {
-                        "$ref": "#/components/schemas/CockroachRelManualNativeQueryConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/CockroachRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/CockroachRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -8009,7 +8456,7 @@
                 ],
                 "type": "object"
             },
-            "RelDef_RelManualNativeQueryConfig___Postgres__Vanilla_": {
+            "RelDef_RelManualConfig___Postgres__Vanilla_": {
                 "properties": {
                     "comment": {
                         "type": "string"
@@ -8018,7 +8465,15 @@
                         "type": "string"
                     },
                     "using": {
-                        "$ref": "#/components/schemas/PostgresRelManualNativeQueryConfig"
+                        "additionalProperties": true,
+                        "anyOf": [
+                            {
+                                "$ref": "#/components/schemas/PostgresRelManualTableConfig"
+                            },
+                            {
+                                "$ref": "#/components/schemas/PostgresRelManualNativeQueryConfig"
+                            }
+                        ]
                     }
                 },
                 "required": [
@@ -9018,6 +9473,37 @@
                 ],
                 "type": "object"
             },
+            "TemplateVariableDynamicFromFile": {
+                "properties": {
+                    "filepath": {
+                        "type": "string"
+                    },
+                    "type": {
+                        "enum": [
+                            "dynamic_from_file"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "filepath",
+                    "type"
+                ],
+                "type": "object"
+            },
+            "TemplateVariableSource": {
+                "discriminator": {
+                    "mapping": {
+                        "dynamic_from_file": "TemplateVariableDynamicFromFile"
+                    },
+                    "propertyName": "type"
+                },
+                "oneOf": [
+                    {
+                        "$ref": "#/components/schemas/TemplateVariableDynamicFromFile"
+                    }
+                ]
+            },
             "TlsAllow": {
                 "properties": {
                     "host": {
@@ -9168,11 +9654,87 @@
             "UrlConfFromParams": {
                 "properties": {
                     "connection_parameters": {
-                        "$ref": "#/components/schemas/PGConnectionParams"
+                        "oneOf": [
+                            {
+                                "properties": {
+                                    "Left": {
+                                        "$ref": "#/components/schemas/PGConnectionParams"
+                                    }
+                                },
+                                "required": [
+                                    "Left"
+                                ],
+                                "type": "object"
+                            },
+                            {
+                                "properties": {
+                                    "Right": {
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "Right"
+                                ],
+                                "type": "object"
+                            }
+                        ]
                     }
                 },
                 "required": [
                     "connection_parameters"
+                ],
+                "type": "object"
+            },
+            "ValidateInputHttpDefinition": {
+                "properties": {
+                    "forward_client_headers": {
+                        "default": false,
+                        "type": "boolean"
+                    },
+                    "headers": {
+                        "default": [],
+                        "items": {
+                            "oneOf": [
+                                {
+                                    "$ref": "#/components/schemas/HeaderConfValue"
+                                },
+                                {
+                                    "$ref": "#/components/schemas/HeaderConfFromEnv"
+                                }
+                            ]
+                        },
+                        "type": "array"
+                    },
+                    "timeout": {
+                        "default": 10,
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "type": "number"
+                    },
+                    "url": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "url"
+                ],
+                "type": "object"
+            },
+            "ValidateInputInputWebhook": {
+                "properties": {
+                    "definition": {
+                        "$ref": "#/components/schemas/ValidateInputHttpDefinition"
+                    },
+                    "type": {
+                        "enum": [
+                            "http"
+                        ],
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "type",
+                    "definition"
                 ],
                 "type": "object"
             }

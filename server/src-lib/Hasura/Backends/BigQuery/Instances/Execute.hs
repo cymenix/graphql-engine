@@ -4,6 +4,7 @@ module Hasura.Backends.BigQuery.Instances.Execute () where
 
 import Data.Aeson qualified as J
 import Data.Aeson.Text qualified as J
+import Data.Environment qualified as Env
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrdHashMap
 import Data.Text qualified as T
@@ -21,11 +22,14 @@ import Hasura.EncJSON
 import Hasura.Function.Cache
 import Hasura.GraphQL.Execute.Backend
 import Hasura.GraphQL.Namespace (RootFieldAlias)
+import Hasura.GraphQL.Parser.Variable qualified as G
+import Hasura.Logging qualified as L
 import Hasura.Prelude
 import Hasura.QueryTags
   ( emptyQueryTagsComment,
   )
 import Hasura.RQL.IR
+import Hasura.RQL.IR.ModelInformation
 import Hasura.RQL.IR.Select qualified as IR
 import Hasura.RQL.IR.Value qualified as IR
 import Hasura.RQL.Types.Backend
@@ -34,8 +38,10 @@ import Hasura.RQL.Types.Column
 import Hasura.RQL.Types.Common
 import Hasura.RQL.Types.Schema.Options qualified as Options
 import Hasura.SQL.AnyBackend qualified as AB
+import Hasura.Server.Types (HeaderPrecedence)
 import Hasura.Session
 import Language.GraphQL.Draft.Syntax qualified as G
+import Network.HTTP.Client as HTTP
 import Network.HTTP.Types qualified as HTTP
 
 instance BackendExecute 'BigQuery where
@@ -72,7 +78,7 @@ bqDBQueryPlan ::
   QueryDB 'BigQuery Void (UnpreparedValue 'BigQuery) ->
   [HTTP.Header] ->
   Maybe G.Name ->
-  m (DBStepInfo 'BigQuery)
+  m (DBStepInfo 'BigQuery, [ModelInfoPart])
 bqDBQueryPlan userInfo sourceName sourceConfig qrf _ _ = do
   -- TODO (naveen): Append query tags to the query
   select <- planNoPlan (BigQuery.bigQuerySourceConfigToFromIrConfig sourceConfig) userInfo qrf
@@ -84,7 +90,10 @@ bqDBQueryPlan userInfo sourceName sourceConfig qrf _ _ = do
         case result of
           Left err -> throw500WithDetail (DataLoader.executeProblemMessage DataLoader.HideDetails err) $ J.toJSON err
           Right (job, recordSet) -> pure ActionResult {arStatistics = Just BigQuery.ExecutionStatistics {_esJob = job}, arResult = recordSetToEncJSON (BigQuery.selectCardinality select) recordSet}
-  pure $ DBStepInfo @'BigQuery sourceName sourceConfig (Just (selectSQLTextForExplain select)) action ()
+  modelNames <- irToModelInfoGen sourceName ModelSourceTypeBigQuery qrf
+  let modelInfo = getModelInfoPartfromModelNames modelNames (ModelOperationType G.OperationTypeQuery)
+
+  pure $ (DBStepInfo @'BigQuery sourceName sourceConfig (Just (selectSQLTextForExplain select)) action (), modelInfo)
 
 -- | Convert the dataloader's 'RecordSet' type to JSON.
 recordSetToEncJSON :: BigQuery.Cardinality -> DataLoader.RecordSet -> EncJSON
@@ -126,6 +135,9 @@ bqDBMutationPlan ::
   forall m.
   ( MonadError E.QErr m
   ) =>
+  Env.Environment ->
+  HTTP.Manager ->
+  L.Logger L.Hasura ->
   UserInfo ->
   Options.StringifyNumbers ->
   SourceName ->
@@ -133,8 +145,10 @@ bqDBMutationPlan ::
   MutationDB 'BigQuery Void (UnpreparedValue 'BigQuery) ->
   [HTTP.Header] ->
   Maybe G.Name ->
-  m (DBStepInfo 'BigQuery)
-bqDBMutationPlan _userInfo _stringifyNum _sourceName _sourceConfig _mrf _headers _gName =
+  Maybe (HashMap G.Name (G.Value G.Variable)) ->
+  HeaderPrecedence ->
+  m (DBStepInfo 'BigQuery, [ModelInfoPart])
+bqDBMutationPlan _env _manager _logger _userInfo _stringifyNum _sourceName _sourceConfig _mrf _headers _gName _maybeSelSetArgs _ =
   throw500 "mutations are not supported in BigQuery; this should be unreachable"
 
 -- explain
@@ -216,9 +230,10 @@ bqDBRemoteRelationshipPlan ::
   [HTTP.Header] ->
   Maybe G.Name ->
   Options.StringifyNumbers ->
-  m (DBStepInfo 'BigQuery)
+  m (DBStepInfo 'BigQuery, [ModelInfoPart])
 bqDBRemoteRelationshipPlan userInfo sourceName sourceConfig lhs lhsSchema argumentId relationship reqHeaders operationName stringifyNumbers = do
-  flip runReaderT emptyQueryTagsComment $ bqDBQueryPlan userInfo sourceName sourceConfig rootSelection reqHeaders operationName
+  (dbStepInfo, modelInfo) <- flip runReaderT emptyQueryTagsComment $ bqDBQueryPlan userInfo sourceName sourceConfig rootSelection reqHeaders operationName
+  pure (dbStepInfo, modelInfo)
   where
     coerceToColumn = BigQuery.ColumnName . getFieldNameTxt
     joinColumnMapping = mapKeys coerceToColumn lhsSchema

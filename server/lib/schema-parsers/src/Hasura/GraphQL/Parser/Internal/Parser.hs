@@ -84,20 +84,41 @@ handleTypename :: (Name -> a) -> ParsedSelection a -> a
 handleTypename _ (SelectField value) = value
 handleTypename f (SelectTypename name) = f name
 
+data NullableInput a
+  = NullableInputValue a
+  | NullableInputNull G.GType
+  | NullableInputAbsent
+  deriving (Show, Functor)
+
+nullableToMaybe :: NullableInput a -> Maybe a
+nullableToMaybe = fromNullableInput Nothing . (Just <$>)
+
+fromNullableInput :: a -> NullableInput a -> a
+fromNullableInput _ (NullableInputValue x) = x
+fromNullableInput d _ = d
+
 nullable :: forall origin k m a. (MonadParse m, 'Input <: k) => Parser origin k m a -> Parser origin k m (Maybe a)
-nullable parser =
+nullable = fmap nullableToMaybe . nullableExact
+
+-- | Distinguishes between inputs with an explicit null value, and inputs whose
+-- variable value is absent without default.  See GraphQL spec June 2018 section
+-- 2.9.5.
+nullableExact :: forall origin k m a. (MonadParse m, 'Input <: k) => Parser origin k m a -> Parser origin k m (NullableInput a)
+nullableExact parser =
   gcastWith
     (inputParserInput @k)
     Parser
       { pType = schemaType,
         pParser =
-          peelVariable (toGraphQLType schemaType) >=> \case
-            JSONValue J.Null -> pure Nothing
-            GraphQLValue VNull -> pure Nothing
-            value -> Just <$> pParser parser value
+          peelVariableWith False gType >=> \case
+            Just (JSONValue J.Null) -> pure $ NullableInputNull gType
+            Just (GraphQLValue VNull) -> pure $ NullableInputNull gType
+            Just value -> NullableInputValue <$> pParser parser value
+            Nothing -> pure NullableInputAbsent
       }
   where
     schemaType = nullableType $ pType parser
+    gType = toGraphQLType schemaType
 
 -- | Decorate a schema field as NON_NULL
 nonNullableField :: forall m origin a. FieldParser origin m a -> FieldParser origin m a
@@ -121,12 +142,22 @@ wrapFieldParser = \case
   G.TypeList (G.Nullability True) t -> nullableField . multipleField . wrapFieldParser t
   G.TypeList (G.Nullability False) t -> nonNullableField . multipleField . wrapFieldParser t
 
--- | Decorate a schema output type as NON_NULL
-nonNullableParser :: forall m origin a. Parser origin 'Output m a -> Parser origin 'Output m a
+-- | Decorate a schema type as NON_NULL.  Note that this is unsafe for
+-- 'Output parsers, in the sense that 'nonNullableParser' doesn't (and due to
+-- the polymorphic nature of the 'a' type parameter, can't) ensure that the
+-- provided parser provides a semantically non-null value.
+nonNullableParser :: forall m origin k a. Parser origin k m a -> Parser origin k m a
 nonNullableParser parser = parser {pType = nonNullableType (pType parser)}
 
--- | Make a schema output as nullable
-nullableParser :: forall m origin a. Parser origin 'Output m a -> Parser origin 'Output m a
+-- | Mark a schema type as nullable.  Syntactically speaking, this is the
+-- default, because the GraphQL spec explicitly requires use of ! to mark types
+-- as non-nullable.  But many constructions in our codebase are non-nullable by
+-- default, since this matches the Haskell type system better.
+--
+-- Note that this is unsafe for 'Input parsers, in the sense that
+-- 'nullableParser' doesn't ensure that the provided parser actually deals with
+-- 'null' input values.
+nullableParser :: forall m origin k a. Parser origin k m a -> Parser origin k m a
 nullableParser parser = parser {pType = nullableType (pType parser)}
 
 multiple :: forall m origin a. Parser origin 'Output m a -> Parser origin 'Output m a
@@ -197,10 +228,7 @@ safeSelectionSet name description fields =
   where
     namesOrigins :: InsOrdHashMap Name [Maybe origin]
     namesOrigins =
-      foldr
-        (uncurry (InsOrdHashMap.insertWith (<>)))
-        InsOrdHashMap.empty
-        ((dName &&& (pure . dOrigin)) . fDefinition <$> fields)
+      foldr (uncurry (InsOrdHashMap.insertWith (<>)) . (dName &&& (pure . dOrigin)) . fDefinition) InsOrdHashMap.empty fields
     duplicates :: InsOrdHashMap Name [Maybe origin]
     duplicates = InsOrdHashMap.filter ((> 1) . length) namesOrigins
     uniques = S.toList . S.fromList

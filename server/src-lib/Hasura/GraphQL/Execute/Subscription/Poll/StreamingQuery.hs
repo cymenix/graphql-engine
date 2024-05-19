@@ -10,11 +10,12 @@ where
 import Control.Concurrent.Async qualified as A
 import Control.Concurrent.STM qualified as STM
 import Control.Lens
+import Data.Aeson.Ordered qualified as JO
 import Data.ByteString qualified as BS
 import Data.HashMap.Strict.Extended qualified as HashMap
 import Data.HashSet qualified as Set
 import Data.List.Split (chunksOf)
-import Data.Monoid (Sum (..))
+import Data.Monoid (Endo (..), Sum (..))
 import Data.Text.Extended
 import GHC.AssertNF
 import Hasura.Base.Error
@@ -29,7 +30,9 @@ import Hasura.GraphQL.Execute.Subscription.Types
 import Hasura.GraphQL.ParameterizedQueryHash (ParameterizedQueryHash)
 import Hasura.GraphQL.Transport.Backend
 import Hasura.GraphQL.Transport.HTTP.Protocol
+import Hasura.Logging (Hasura, LogLevel (..), Logger (unLogger))
 import Hasura.Prelude
+import Hasura.RQL.IR.ModelInformation
 import Hasura.RQL.Types.Backend
 import Hasura.RQL.Types.BackendTag (backendTag, reify)
 import Hasura.RQL.Types.BackendType (BackendType (..), PostgresKind (Vanilla))
@@ -37,8 +40,9 @@ import Hasura.RQL.Types.Common (SourceName)
 import Hasura.RQL.Types.Roles (RoleName)
 import Hasura.RQL.Types.Subscription (SubscriptionType (..))
 import Hasura.SQL.Value (TxtEncodedVal (..))
-import Hasura.Server.Prometheus (PrometheusMetrics (..), SubscriptionMetrics (..), recordSubcriptionMetric, streamingSubscriptionLabel)
-import Hasura.Server.Types (GranularPrometheusMetricsState (..))
+import Hasura.Server.Logging (ModelInfo (..), ModelInfoLog (..))
+import Hasura.Server.Prometheus (PrometheusMetrics (..), SubscriptionMetrics (..), recordSubscriptionMetric, streamingSubscriptionLabel)
+import Hasura.Server.Types (GranularPrometheusMetricsState (..), ModelInfoLogState (..))
 import Language.GraphQL.Draft.Syntax qualified as G
 import Refined (unrefine)
 import System.Metrics.Prometheus.Gauge qualified as Prometheus.Gauge
@@ -254,10 +258,14 @@ pollStreamingQuery ::
   IO GranularPrometheusMetricsState ->
   TMap.TMap (Maybe OperationName) Int ->
   ResolvedConnectionTemplate b ->
+  Maybe (Endo JO.Value) ->
+  Logger Hasura ->
+  [ModelInfoPart] ->
+  IO ModelInfoLogState ->
   IO ()
-pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, sourceConfig) roleName parameterizedQueryHash query cohortMap rootFieldName postPollHook testActionMaybe prometheusMetrics granularPrometheusMetricsState operationNames' resolvedConnectionTemplate = do
+pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, sourceConfig) roleName parameterizedQueryHash query cohortMap rootFieldName postPollHook testActionMaybe prometheusMetrics granularPrometheusMetricsState operationNames' resolvedConnectionTemplate modifier logger modelInfoList modelInfoLogStatus = do
   operationNames <- STM.atomically $ TMap.getMap operationNames'
-  (totalTime, (snapshotTime, batchesDetailsAndProcessedCohorts)) <- withElapsedTime $ do
+  (totalTime, (snapshotTime, (batchesDetails, processedCohorts, maybeErrors))) <- withElapsedTime $ do
     -- snapshot the current cohorts and split them into batches
     -- This STM transaction is a read only transaction i.e. it doesn't mutate any state
     (snapshotTime, cohortBatches) <- withElapsedTime $ do
@@ -273,7 +281,7 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
     for_ testActionMaybe id -- IO action intended to run after the cohorts have been snapshotted
 
     -- concurrently process each batch and also get the processed cohort with the new updated cohort key
-    batchesDetailsAndProcessedCohorts <- A.forConcurrently cohortBatches $ \(batchId, cohorts) -> do
+    batchesDetailsAndProcessedCohortsWithMaybeError <- A.forConcurrently cohortBatches $ \(batchId, cohorts) -> do
       (queryExecutionTime, mxRes) <-
         runDBStreamingSubscription @b
           sourceConfig
@@ -281,7 +289,7 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
           (over (each . _2) C._csVariables $ fmap (fmap fst) cohorts)
           resolvedConnectionTemplate
       let dbExecTimeMetric = submDBExecTotalTime $ pmSubscriptionMetrics $ prometheusMetrics
-      recordSubcriptionMetric
+      recordSubscriptionMetric
         granularPrometheusMetricsState
         True
         operationNames
@@ -291,15 +299,22 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
 
       previousPollerResponseState <- STM.readTVarIO pollerResponseState
 
-      case mxRes of
-        Left _ -> do
+      maybeError <- case mxRes of
+        Left err -> do
           when (previousPollerResponseState == PRSSuccess) $ do
             Prometheus.Gauge.inc $ submActiveStreamingPollersInError $ pmSubscriptionMetrics prometheusMetrics
             STM.atomically $ STM.writeTVar pollerResponseState PRSError
+          let pollDetailsError =
+                PollDetailsError
+                  { _pdeBatchId = batchId,
+                    _pdeErrorDetails = err
+                  }
+          return $ Just pollDetailsError
         Right _ -> do
           when (previousPollerResponseState == PRSError) $ do
             Prometheus.Gauge.dec $ submActiveStreamingPollersInError $ pmSubscriptionMetrics prometheusMetrics
             STM.atomically $ STM.writeTVar pollerResponseState PRSSuccess
+          return Nothing
 
       let subscriptionMeta = SubscriptionMetadata $ convertDuration queryExecutionTime
           operations = getCohortOperations cohorts mxRes
@@ -349,23 +364,33 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
               batchId
               (fst <$> cohortsExecutionDetails)
               batchResponseSize
-      pure $ (batchExecDetails, processedCohortBatch)
+      pure $ (batchExecDetails, processedCohortBatch, maybeError)
 
-    pure (snapshotTime, batchesDetailsAndProcessedCohorts)
+    pure (snapshotTime, unzip3 batchesDetailsAndProcessedCohortsWithMaybeError)
 
-  let pollDetails =
+  let initPollDetails =
         PollDetails
           { _pdPollerId = pollerId,
             _pdKind = Streaming,
             _pdGeneratedSql = toTxt query,
             _pdSnapshotTime = snapshotTime,
-            _pdBatches = fst <$> batchesDetailsAndProcessedCohorts,
+            _pdBatches = batchesDetails,
             _pdLiveQueryOptions = streamingQueryOpts,
             _pdTotalTime = totalTime,
             _pdSource = sourceName,
             _pdRole = roleName,
-            _pdParameterizedQueryHash = parameterizedQueryHash
+            _pdParameterizedQueryHash = parameterizedQueryHash,
+            _pdLogLevel = LevelInfo,
+            _pdErrors = Nothing
           }
+      maybePollDetailsErrors = sequenceA maybeErrors
+      pollDetails = case maybePollDetailsErrors of
+        Nothing -> initPollDetails
+        Just pollDetailsError ->
+          initPollDetails
+            { _pdLogLevel = LevelError,
+              _pdErrors = Just pollDetailsError
+            }
 
   STM.atomically $ do
     -- constructing a cohort map for all the cohorts that have been
@@ -373,7 +398,7 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
 
     -- processed cohorts is an array of tuples of the current poll cohort variables and a tuple
     -- of the cohort and the new cohort key
-    let processedCohortsMap = HashMap.fromList $ snd =<< batchesDetailsAndProcessedCohorts
+    let processedCohortsMap = HashMap.fromList $ concat processedCohorts
 
     -- rebuilding the cohorts and the cohort map, see [Streaming subscription polling]
     -- and [Streaming subscriptions rebuilding cohort map]
@@ -439,9 +464,13 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
         mempty
         currentCohorts
     TMap.replace cohortMap updatedCohortsMap
+  modelInfoLogStatus' <- modelInfoLogStatus
+  when (modelInfoLogStatus' == ModelInfoLogOn) $ do
+    for_ (modelInfoList) $ \(ModelInfoPart modelName modelType modelSourceName modelSourceType modelQueryType) -> do
+      unLogger logger $ ModelInfoLog LevelInfo $ ModelInfo modelName (toTxt modelType) (toTxt <$> modelSourceName) (toTxt <$> modelSourceType) (toTxt modelQueryType) False
   postPollHook pollDetails
   let totalTimeMetric = submTotalTime $ pmSubscriptionMetrics $ prometheusMetrics
-  recordSubcriptionMetric
+  recordSubscriptionMetric
     granularPrometheusMetricsState
     True
     operationNames
@@ -498,5 +527,5 @@ pollStreamingQuery pollerId pollerResponseState streamingQueryOpts (sourceName, 
               -- Postgres response is not present in the cohort map of this batch
               -- (this shouldn't happen but if it happens it means a logic error and
               -- we should log it)
-              (pure respBS,cohortId,Just (respHash, respSize),Just respCursorLatestValue,)
+              (pure (applyModifier modifier respBS),cohortId,Just (respHash, respSize),Just respCursorLatestValue,)
                 <$> HashMap.lookup cohortId cohortSnapshotMap

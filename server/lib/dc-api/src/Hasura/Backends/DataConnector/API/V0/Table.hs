@@ -90,7 +90,7 @@ instance HasCodec TableInfo where
       TableInfo
         <$> requiredField "name" "The name of the table" .= _tiName
         <*> optionalFieldWithDefault "type" Table "The type of table" .= _tiType
-        <*> requiredField "columns" "The columns of the table" .= _tiColumns
+        <*> optionalFieldWithDefault "columns" [] "The columns of the table" .= _tiColumns
         <*> dimapMaybeNonEmpty (optionalFieldWithOmittedDefault "primary_key" [] "The primary key of the table") .= _tiPrimaryKey
         <*> optionalFieldWithOmittedDefault "foreign_keys" (ForeignKeys mempty) "Foreign key constraints" .= _tiForeignKeys
         <*> optionalFieldOrNull "description" "Description of the table" .= _tiDescription
@@ -122,7 +122,7 @@ instance HasCodec TableType where
 --------------------------------------------------------------------------------
 
 newtype ForeignKeys = ForeignKeys {_unForeignKeys :: HashMap ConstraintName Constraint}
-  deriving stock (Eq, Ord, Show, Generic, Data)
+  deriving stock (Eq, Ord, Show, Generic)
   deriving anyclass (NFData, Hashable)
   deriving (FromJSON, ToJSON) via Autodocodec ForeignKeys
 
@@ -138,9 +138,9 @@ newtype ConstraintName = ConstraintName {unConstraintName :: Text}
 
 data Constraint = Constraint
   { _cForeignTable :: TableName,
-    _cColumnMapping :: HashMap API.V0.ColumnName API.V0.ColumnName
+    _cColumnMapping :: API.V0.ColumnPathMapping
   }
-  deriving stock (Eq, Ord, Show, Generic, Data)
+  deriving stock (Eq, Ord, Show, Generic)
   deriving anyclass (NFData, Hashable)
   deriving (FromJSON, ToJSON) via Autodocodec Constraint
 

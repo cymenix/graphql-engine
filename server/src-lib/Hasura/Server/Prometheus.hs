@@ -8,6 +8,7 @@ module Hasura.Server.Prometheus
     GraphQLRequestMetrics (..),
     EventTriggerMetrics (..),
     CacheRequestMetrics (..),
+    OpenTelemetryMetrics (..),
     makeDummyPrometheusMetrics,
     ConnectionsGauge,
     Connections (..),
@@ -30,11 +31,13 @@ module Hasura.Server.Prometheus
     observeHistogramWithLabel,
     SubscriptionKindLabel (..),
     SubscriptionLabel (..),
-    DynamicSubscriptionLabel (..),
+    DynamicGraphqlOperationLabel (..),
     streamingSubscriptionLabel,
     liveQuerySubscriptionLabel,
     recordMetricWithLabel,
-    recordSubcriptionMetric,
+    recordSubscriptionMetric,
+    GraphQLRequestsLabels,
+    recordGraphqlOperationMetric,
   )
 where
 
@@ -70,23 +73,19 @@ data PrometheusMetrics = PrometheusMetrics
     pmGraphQLRequestMetrics :: GraphQLRequestMetrics,
     pmEventTriggerMetrics :: EventTriggerMetrics,
     pmWebSocketBytesReceived :: Counter,
-    pmWebSocketBytesSent :: Counter,
+    pmWebSocketBytesSent :: CounterVector DynamicGraphqlOperationLabel,
     pmActionBytesReceived :: Counter,
     pmActionBytesSent :: Counter,
     pmScheduledTriggerMetrics :: ScheduledTriggerMetrics,
     pmSubscriptionMetrics :: SubscriptionMetrics,
     pmWebsocketMsgQueueTimeSeconds :: Histogram,
-    pmCacheRequestMetrics :: CacheRequestMetrics
+    pmWebsocketMsgWriteTimeSeconds :: Histogram,
+    pmCacheRequestMetrics :: CacheRequestMetrics,
+    pmOpenTelemetryMetrics :: OpenTelemetryMetrics
   }
 
 data GraphQLRequestMetrics = GraphQLRequestMetrics
-  { gqlRequestsQuerySuccess :: Counter,
-    gqlRequestsQueryFailure :: Counter,
-    gqlRequestsMutationSuccess :: Counter,
-    gqlRequestsMutationFailure :: Counter,
-    gqlRequestsSubscriptionSuccess :: Counter,
-    gqlRequestsSubscriptionFailure :: Counter,
-    gqlRequestsUnknownFailure :: Counter,
+  { gqlRequests :: CounterVector GraphQLRequestsLabels,
     gqlExecutionTimeSecondsQuery :: Histogram,
     gqlExecutionTimeSecondsMutation :: Histogram
   }
@@ -132,6 +131,20 @@ data CacheRequestMetrics = CacheRequestMetrics
     crmCacheMisses :: Counter
   }
 
+-- | Metrics related to OTel telemetry export; for now the volume of logs and
+-- trace spans shipped, and counts of log lines and spans dropped due to high
+-- volume.
+data OpenTelemetryMetrics = OpenTelemetryMetrics
+  { otmSentSpans :: Counter,
+    -- | Dropped due to the send buffer being full
+    otmDroppedSpansInBuffer :: Counter,
+    -- | Dropped due to some error (after retrying) when sending to collector
+    otmDroppedSpansInSend :: Counter,
+    otmSentLogs :: Counter,
+    otmDroppedLogsInBuffer :: Counter,
+    otmDroppedLogsInSend :: Counter
+  }
+
 -- | Create dummy mutable references without associating them to a metrics
 -- store.
 makeDummyPrometheusMetrics :: IO PrometheusMetrics
@@ -140,24 +153,20 @@ makeDummyPrometheusMetrics = do
   pmGraphQLRequestMetrics <- makeDummyGraphQLRequestMetrics
   pmEventTriggerMetrics <- makeDummyEventTriggerMetrics
   pmWebSocketBytesReceived <- Counter.new
-  pmWebSocketBytesSent <- Counter.new
+  pmWebSocketBytesSent <- CounterVector.new
   pmActionBytesReceived <- Counter.new
   pmActionBytesSent <- Counter.new
   pmScheduledTriggerMetrics <- makeDummyScheduledTriggerMetrics
   pmSubscriptionMetrics <- makeDummySubscriptionMetrics
   pmWebsocketMsgQueueTimeSeconds <- Histogram.new []
+  pmWebsocketMsgWriteTimeSeconds <- Histogram.new []
   pmCacheRequestMetrics <- makeDummyCacheRequestMetrics
+  pmOpenTelemetryMetrics <- makeDummyOpenTelemetryMetrics
   pure PrometheusMetrics {..}
 
 makeDummyGraphQLRequestMetrics :: IO GraphQLRequestMetrics
 makeDummyGraphQLRequestMetrics = do
-  gqlRequestsQuerySuccess <- Counter.new
-  gqlRequestsQueryFailure <- Counter.new
-  gqlRequestsMutationSuccess <- Counter.new
-  gqlRequestsMutationFailure <- Counter.new
-  gqlRequestsSubscriptionSuccess <- Counter.new
-  gqlRequestsSubscriptionFailure <- Counter.new
-  gqlRequestsUnknownFailure <- Counter.new
+  gqlRequests <- CounterVector.new
   gqlExecutionTimeSecondsQuery <- Histogram.new []
   gqlExecutionTimeSecondsMutation <- Histogram.new []
   pure GraphQLRequestMetrics {..}
@@ -206,6 +215,16 @@ makeDummyCacheRequestMetrics = do
   crmCacheHits <- Counter.new
   crmCacheMisses <- Counter.new
   pure CacheRequestMetrics {..}
+
+makeDummyOpenTelemetryMetrics :: IO OpenTelemetryMetrics
+makeDummyOpenTelemetryMetrics = do
+  otmSentSpans <- Counter.new
+  otmDroppedSpansInSend <- Counter.new
+  otmDroppedSpansInBuffer <- Counter.new
+  otmSentLogs <- Counter.new
+  otmDroppedLogsInSend <- Counter.new
+  otmDroppedLogsInBuffer <- Counter.new
+  pure OpenTelemetryMetrics {..}
 
 --------------------------------------------------------------------------------
 
@@ -266,6 +285,7 @@ instance ToLabels (Maybe DynamicEventTriggerLabel) where
   toLabels (Just (DynamicEventTriggerLabel triggerName sourceName)) = Map.fromList $ [("trigger_name", triggerNameToTxt triggerName), ("source_name", sourceNameToText sourceName)]
 
 data ResponseStatus = Success | Failed
+  deriving stock (Generic, Ord, Eq)
 
 -- TODO: Make this a method of a new typeclass of the metrics library
 responseStatusToLabelValue :: ResponseStatus -> Text
@@ -306,27 +326,46 @@ streamingSubscriptionLabel = SubscriptionKindLabel "streaming"
 liveQuerySubscriptionLabel :: SubscriptionKindLabel
 liveQuerySubscriptionLabel = SubscriptionKindLabel "live-query"
 
-data DynamicSubscriptionLabel = DynamicSubscriptionLabel
-  { _dslParamQueryHash :: ParameterizedQueryHash,
+data DynamicGraphqlOperationLabel = DynamicGraphqlOperationLabel
+  { _dslParamQueryHash :: Maybe ParameterizedQueryHash,
     _dslOperationName :: Maybe OperationName
   }
   deriving stock (Generic, Ord, Eq)
 
-instance ToLabels DynamicSubscriptionLabel where
-  toLabels (DynamicSubscriptionLabel hash opName) =
+instance ToLabels DynamicGraphqlOperationLabel where
+  toLabels (DynamicGraphqlOperationLabel hash opName) =
     Map.fromList
-      $ [("parameterized_query_hash", bsToTxt $ unParamQueryHash hash)]
+      $ maybe [] (\pqh -> [("parameterized_query_hash", bsToTxt $ unParamQueryHash pqh)]) hash
       <> maybe [] (\op -> [("operation_name", G.unName $ _unOperationName op)]) opName
 
 data SubscriptionLabel = SubscriptionLabel
   { _slKind :: SubscriptionKindLabel,
-    _slDynamicLabels :: Maybe DynamicSubscriptionLabel
+    _slDynamicLabels :: Maybe DynamicGraphqlOperationLabel
   }
   deriving stock (Generic, Ord, Eq)
 
 instance ToLabels SubscriptionLabel where
   toLabels (SubscriptionLabel kind Nothing) = Map.fromList $ [("subscription_kind", subscription_kind kind)]
   toLabels (SubscriptionLabel kind (Just dl)) = (Map.fromList $ [("subscription_kind", subscription_kind kind)]) <> toLabels dl
+
+-- TODO: Make this a method of a new typeclass of the metrics library
+opTypeToLabelValue :: Maybe G.OperationType -> Text
+opTypeToLabelValue = \case
+  (Just G.OperationTypeQuery) -> "query"
+  (Just G.OperationTypeMutation) -> "mutation"
+  (Just G.OperationTypeSubscription) -> "subscription"
+  Nothing -> "unknown"
+
+data GraphQLRequestsLabels = GraphQLRequestsLabels
+  { operation_type :: Maybe G.OperationType,
+    response_status :: ResponseStatus,
+    dynamic_label :: Maybe DynamicGraphqlOperationLabel
+  }
+  deriving stock (Generic, Ord, Eq)
+
+instance ToLabels (GraphQLRequestsLabels) where
+  toLabels (GraphQLRequestsLabels op_type res_status dynamic_labels) =
+    (HashMap.fromList $ [("operation_type", opTypeToLabelValue op_type), ("response_status", responseStatusToLabelValue res_status)]) <> (fromMaybe mempty (toLabels <$> dynamic_labels))
 
 -- | Record metrics with dynamic label
 recordMetricWithLabel ::
@@ -372,7 +411,7 @@ observeHistogramWithLabel getMetricState alwaysObserve histogramVector label val
 
 -- | Record a subscription metric for all the operation names present in the subscription.
 -- Use this when you want to update the same value of the metric for all the operation names.
-recordSubcriptionMetric ::
+recordSubscriptionMetric ::
   (MonadIO m) =>
   (IO GranularPrometheusMetricsState) ->
   -- should the metric be observed without a label when granularMetricsState is OFF
@@ -383,11 +422,11 @@ recordSubcriptionMetric ::
   -- the mertic action to perform
   (SubscriptionLabel -> IO ()) ->
   m ()
-recordSubcriptionMetric getMetricState alwaysObserve operationNamesMap parameterizedQueryHash subscriptionKind metricAction = do
+recordSubscriptionMetric getMetricState alwaysObserve operationNamesMap parameterizedQueryHash subscriptionKind metricAction = do
   -- if no operation names are present, then emit metric with only param query hash as dynamic label
   if (null operationNamesMap)
     then do
-      let promMetricGranularLabel = SubscriptionLabel subscriptionKind (Just $ DynamicSubscriptionLabel parameterizedQueryHash Nothing)
+      let promMetricGranularLabel = SubscriptionLabel subscriptionKind (Just $ DynamicGraphqlOperationLabel (Just parameterizedQueryHash) Nothing)
           promMetricLabel = SubscriptionLabel subscriptionKind Nothing
       recordMetricWithLabel
         getMetricState
@@ -398,10 +437,29 @@ recordSubcriptionMetric getMetricState alwaysObserve operationNamesMap parameter
     do
       let operationNames = HashMap.keys operationNamesMap
       for_ operationNames $ \opName -> do
-        let promMetricGranularLabel = SubscriptionLabel subscriptionKind (Just $ DynamicSubscriptionLabel parameterizedQueryHash opName)
+        let promMetricGranularLabel = SubscriptionLabel subscriptionKind (Just $ DynamicGraphqlOperationLabel (Just parameterizedQueryHash) opName)
             promMetricLabel = SubscriptionLabel subscriptionKind Nothing
         recordMetricWithLabel
           getMetricState
           alwaysObserve
           (metricAction promMetricGranularLabel)
           (metricAction promMetricLabel)
+
+recordGraphqlOperationMetric ::
+  (MonadIO m) =>
+  (IO GranularPrometheusMetricsState) ->
+  Maybe G.OperationType ->
+  ResponseStatus ->
+  Maybe OperationName ->
+  Maybe ParameterizedQueryHash ->
+  (GraphQLRequestsLabels -> IO ()) ->
+  m ()
+recordGraphqlOperationMetric getMetricState operationType responseStatus operationName parameterizedQueryHash metricAction = do
+  let dynamicLabel = DynamicGraphqlOperationLabel parameterizedQueryHash operationName
+      promMetricGranularLabel = GraphQLRequestsLabels operationType responseStatus (Just dynamicLabel)
+      promMetricLabel = GraphQLRequestsLabels operationType responseStatus Nothing
+  recordMetricWithLabel
+    getMetricState
+    True
+    (metricAction promMetricGranularLabel)
+    (metricAction promMetricLabel)

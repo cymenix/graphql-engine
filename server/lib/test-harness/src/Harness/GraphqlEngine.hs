@@ -5,6 +5,9 @@
 module Harness.GraphqlEngine
   ( -- * HTTP Calls
 
+    -- ** GET
+    get,
+
     -- ** POST
     post,
     post_,
@@ -15,12 +18,16 @@ module Harness.GraphqlEngine
     postMetadataWithStatus,
     postMetadataWithStatusAndHeaders,
     postExplain,
+    postExplainWithStatus,
     exportMetadata,
     reloadMetadata,
     postGraphqlYaml,
     postGraphqlYamlWithHeaders,
     postGraphql,
+    postGraphqlWithReqHeaders,
+    postMetadataWithStatusAndReqHeaders,
     postGraphqlInternal,
+    postMetadataInternal,
     postGraphqlWithVariables,
     postGraphqlWithPair,
     postGraphqlWithHeaders,
@@ -52,6 +59,7 @@ import Control.Concurrent (myThreadId)
 import Control.Concurrent.Async qualified as Async
 import Control.Monad.Trans.Managed (ManagedT (..), lowerManagedT)
 import Data.Aeson (Value (String), encode, fromJSON, object, (.=))
+import Data.Aeson qualified as Aeson
 import Data.Aeson.Encode.Pretty as AP
 import Data.Aeson.Types (Pair)
 import Data.ByteString (ByteString)
@@ -69,11 +77,11 @@ import Harness.Http qualified as Http
 import Harness.Logging
 import Harness.Quoter.Yaml (fromYaml, yaml)
 import Harness.Services.GraphqlEngine
-import Harness.TestEnvironment (Protocol (..), Server (..), TestEnvironment (..), TestingRole (..), getServer, requestProtocol, serverUrl, traceIf)
+import Harness.TestEnvironment (Protocol (..), Server (..), TestEnvironment (..), TestingRole (..), getServer, requestProtocol, server, serverUrl, traceIf)
 import Harness.WebSockets (responseListener, sendMessages)
 import Hasura.App qualified as App
 import Hasura.Logging (Hasura)
-import Hasura.Prelude
+import Hasura.Prelude hiding (get)
 import Hasura.Server.App (CEConsoleType (OSSConsole))
 import Hasura.Server.Init (PostgresConnInfo (..), ServeOptions (..), unsafePort)
 import Hasura.Server.Metrics (ServerMetricsSpec, createServerMetrics)
@@ -86,6 +94,22 @@ import System.Metrics qualified as EKG
 import Test.Hspec
 
 -------------------------------------------------------------------------------
+
+-- HTTP Calls - GET
+
+-- | Get some data from graphql-engine
+--
+-- Optimistically assumes success
+--
+-- Note: We add 'withFrozenCallStack' to reduce stack trace clutter.
+get ::
+  (HasCallStack) => TestEnvironment -> String -> IO Text
+get testEnv@(getServer -> Server {urlPrefix, port}) path =
+  withFrozenCallStack $ do
+    testLogMessage testEnv $ LogHGERequest (T.pack path) $ traceIf testEnv Aeson.Null
+    responseBody <- Http.get (urlPrefix ++ ":" ++ show port ++ path)
+    testLogMessage testEnv $ LogHGEResponse (T.pack path) (String responseBody)
+    pure responseBody
 
 -- HTTP Calls - POST
 
@@ -150,38 +174,46 @@ postGraphqlViaHttpOrWebSocketWithHeadersStatus ::
   (HasCallStack) => Int -> TestEnvironment -> Http.RequestHeaders -> Value -> IO Value
 postGraphqlViaHttpOrWebSocketWithHeadersStatus statusCode testEnv headers requestBody = do
   withFrozenCallStack $ case requestProtocol (globalEnvironment testEnv) of
-    WebSocket connection -> postWithHeadersStatusViaWebSocket testEnv connection (addAuthzHeaders testEnv headers) requestBody
+    WebSocket -> postWithHeadersStatusViaWebSocket testEnv (addAuthzHeaders testEnv headers) requestBody
     HTTP -> postWithHeadersStatus statusCode testEnv "/v1/graphql" headers requestBody
 
 -- | Post some JSON to graphql-engine, getting back more JSON, via websockets.
 --
 -- This will be used by 'postWithHeadersStatus' if the 'TestEnvironment' sets
 -- the 'requestProtocol' to 'WebSocket'.
-postWithHeadersStatusViaWebSocket :: TestEnvironment -> WS.Connection -> Http.RequestHeaders -> Value -> IO Value
-postWithHeadersStatusViaWebSocket testEnv connection headers requestBody = do
+postWithHeadersStatusViaWebSocket :: TestEnvironment -> Http.RequestHeaders -> Value -> IO Value
+postWithHeadersStatusViaWebSocket testEnv headers requestBody = do
   let preparedHeaders :: HashMap Text ByteString
       preparedHeaders =
         HashMap.fromList
           [ (decodeUtf8 (original key), value)
             | (key, value) <- headers
           ]
-  sendMessages
-    testEnv
-    connection
-    [ object
-        [ "type" .= String "connection_init",
-          "payload" .= object ["headers" .= preparedHeaders]
-        ],
-      object
-        [ "id" .= String "some-request-id",
-          "type" .= String "start",
-          "payload" .= requestBody
-        ]
-    ]
+      server' = server (globalEnvironment testEnv)
+      port' = port server'
+      host = T.unpack (T.drop 7 (T.pack (urlPrefix server')))
+      path = "/v1/graphql"
 
-  responseListener testEnv connection \_ type' payload -> do
-    when (type' `notElem` ["data", "error"]) $ fail ("Websocket message type " <> T.unpack type' <> " received. Payload: " <> Char8.unpack (encode payload))
-    pure payload
+  -- paritosh: We are initiating a websocket connection for each request and sending the request instead of initiating a
+  -- websocket connection for the test and reusing the connection for requests. This is done to avoid managing the
+  -- connection (as we do have metadata changes as part of test and HGE closes websockets on metadata changes).
+  WS.runClient host (fromIntegral port') path \connection -> do
+    sendMessages
+      testEnv
+      connection
+      [ object
+          [ "type" .= String "connection_init",
+            "payload" .= object ["headers" .= preparedHeaders]
+          ],
+        object
+          [ "id" .= String "some-request-id",
+            "type" .= String "start",
+            "payload" .= requestBody
+          ]
+      ]
+    responseListener testEnv connection \_ type' payload -> do
+      unless (type' `elem` ["data", "error"]) $ fail ("Websocket message type " <> T.unpack type' <> " received. Payload: " <> Char8.unpack (encode payload))
+      pure payload
 
 -- | Post some JSON to graphql-engine, getting back more JSON.
 --
@@ -210,14 +242,24 @@ postGraphqlYamlWithHeaders testEnvironment headers =
   withFrozenCallStack $ postGraphqlViaHttpOrWebSocketWithHeadersStatus 200 testEnvironment headers
 
 postGraphql :: (Has PostGraphql testEnvironment) => testEnvironment -> Value -> IO Value
-postGraphql = getPostGraphql . getter
+postGraphql testEnv = (getPostGraphql $ getter testEnv) []
+
+postGraphqlWithReqHeaders :: (Has PostGraphql testEnvironment) => testEnvironment -> Http.RequestHeaders -> Value -> IO Value
+postGraphqlWithReqHeaders = getPostGraphql . getter
+
+postMetadataWithStatusAndReqHeaders :: (Has PostMetadata testEnvironment) => testEnvironment -> Int -> Http.RequestHeaders -> Value -> IO Value
+postMetadataWithStatusAndReqHeaders = getPostMetadata . getter
 
 -- | Same as 'postGraphqlYaml', but adds the @{query:..}@ wrapper.
 --
 -- Note: We add 'withFrozenCallStack' to reduce stack trace clutter.
-postGraphqlInternal :: (HasCallStack) => TestEnvironment -> Value -> IO Value
-postGraphqlInternal testEnvironment value =
-  withFrozenCallStack $ postGraphqlYaml testEnvironment (object ["query" .= value])
+postGraphqlInternal :: (HasCallStack) => TestEnvironment -> Http.RequestHeaders -> Value -> IO Value
+postGraphqlInternal testEnvironment reqHeaders value =
+  withFrozenCallStack $ postGraphqlYamlWithHeaders testEnvironment reqHeaders (object ["query" .= value])
+
+postMetadataInternal :: (HasCallStack) => TestEnvironment -> Int -> Http.RequestHeaders -> Value -> IO Value
+postMetadataInternal testEnvironment status reqHeaders value =
+  withFrozenCallStack $ postMetadataWithStatusAndHeaders status testEnvironment reqHeaders value
 
 -- | Same as 'postGraphql', but accepts variables to the GraphQL query as well.
 postGraphqlWithVariables :: (HasCallStack) => TestEnvironment -> Value -> Value -> IO Value
@@ -247,9 +289,14 @@ postGraphqlWithHeaders testEnvironment headers value =
 
 -- | post to /v1/graphql/explain endpoint
 postExplain :: (HasCallStack) => TestEnvironment -> Value -> IO Value
-postExplain testEnvironment value =
+postExplain = postExplainWithStatus 200
+
+-- | post to /v1/graphql/explain endpoint and expect a specific status
+postExplainWithStatus :: (HasCallStack) => Int -> TestEnvironment -> Value -> IO Value
+postExplainWithStatus status testEnvironment value =
   withFrozenCallStack
-    $ postWithHeaders
+    $ postWithHeadersStatus
+      status
       testEnvironment
       "/v1/graphql/explain"
       mempty

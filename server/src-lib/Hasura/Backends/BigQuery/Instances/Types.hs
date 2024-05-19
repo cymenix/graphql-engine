@@ -26,8 +26,9 @@ instance Backend 'BigQuery where
   type ConstraintName 'BigQuery = Void
   type BasicOrderType 'BigQuery = BigQuery.Order
   type NullsOrderType 'BigQuery = BigQuery.NullsOrder
-  type CountType 'BigQuery = BigQuery.Countable BigQuery.ColumnName
+  type CountType 'BigQuery = BigQuery.CountType
   type Column 'BigQuery = BigQuery.ColumnName
+  type ColumnPath 'BigQuery = BigQuery.ColumnName
   type ScalarValue 'BigQuery = BigQuery.Value
   type ScalarType 'BigQuery = BigQuery.ScalarType
   type SQLExpression 'BigQuery = BigQuery.Expression
@@ -60,8 +61,8 @@ instance Backend 'BigQuery where
   textToScalarValue :: Maybe Text -> ScalarValue 'BigQuery
   textToScalarValue = maybe BigQuery.NullValue BigQuery.StringValue
 
-  parseScalarValue :: ScalarType 'BigQuery -> Value -> Either QErr (ScalarValue 'BigQuery)
-  parseScalarValue = BigQuery.parseScalarValue
+  parseScalarValue :: ScalarTypeParsingContext 'BigQuery -> ScalarType 'BigQuery -> Value -> Either QErr (ScalarValue 'BigQuery)
+  parseScalarValue = const BigQuery.parseScalarValue
 
   scalarValueToJSON :: ScalarValue 'BigQuery -> Value
   scalarValueToJSON = error "scalarValueToJSON"
@@ -115,9 +116,16 @@ instance Backend 'BigQuery where
 
   defaultTriggerOnReplication = Nothing
 
+  getColVals _ _ _ _ _ _ = throw500 "getColVals: not implemented for the BigQuery backend"
+
+  getColumnPathColumn = id
+
+  tryColumnPathToColumn = Just
+
 instance HasSourceConfiguration 'BigQuery where
   type SourceConfig 'BigQuery = BigQuery.BigQuerySourceConfig
   type SourceConnConfiguration 'BigQuery = BigQuery.BigQueryConnSourceConfig
   sourceConfigNumReadReplicas = const 0 -- not supported
-  sourceConfigConnectonTemplateEnabled = const False -- not supported
+  sourceConfigConnectonTemplate = const Nothing -- not supported
+  sourceSupportsColumnRedaction = const True
   sourceConfigBackendSourceKind _sourceConfig = BigQueryKind

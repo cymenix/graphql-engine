@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
@@ -5,18 +6,17 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
-{-# HLINT ignore "Use tshow" #-}
-{-# HLINT ignore "Use onLeft" #-}
 
 module Database.PG.Query.Connection
   ( initPQConn,
     defaultConnInfo,
     ConnInfo (..),
     ConnDetails (..),
+    extractConnOptions,
+    extractHost,
     ConnOptions (..),
     pgConnString,
     PGQuery (..),
@@ -47,33 +47,46 @@ where
 -------------------------------------------------------------------------------
 
 import Control.Concurrent.Interrupt (interruptOnAsyncException)
-import Control.Exception.Safe (Exception, catch, throwIO)
+import Control.Exception.Safe (Exception, SomeException (..), catch, throwIO)
+import Control.Monad (unless)
 import Control.Monad.Except (MonadError (throwError))
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Except (ExceptT, runExceptT, withExceptT)
 import Control.Retry (RetryPolicyM)
 import Control.Retry qualified as Retry
-import Data.Aeson (ToJSON (toJSON), genericToJSON)
+import Data.Aeson (ToJSON (toJSON), Value (String), encode, genericToJSON, object, (.=))
 import Data.Aeson.Casing (aesonDrop, snakeCase)
 import Data.Aeson.TH (mkToJSON)
 import Data.Bool (bool)
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import Data.ByteString.Char8 (unpack)
 import Data.Foldable (for_)
 import Data.HashTable.IO qualified as HIO
 import Data.Hashable (Hashable (hashWithSalt))
 import Data.IORef (IORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
+import Data.Monoid (getLast)
 import Data.String (IsString (fromString))
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Encoding (decodeUtf8With, encodeUtf8)
+import Data.Text.Encoding (decodeUtf8, decodeUtf8With, encodeUtf8)
 import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time (NominalDiffTime, UTCTime)
 import Data.Word (Word16, Word32)
+import Database.PG.Query.URL (encodeURLPassword)
 import Database.PostgreSQL.LibPQ qualified as PQ
+import Database.PostgreSQL.Simple.Options qualified as Options
 import GHC.Generics (Generic)
+import Network.HTTP.Client
+import Network.HTTP.Types.Status (statusCode)
+import System.Environment (lookupEnv)
 import Prelude
+
+{-# ANN module ("HLint: ignore Use tshow" :: String) #-}
+
+{-# ANN module ("HLint: ignore Use onLeft" :: String) #-}
 
 -------------------------------------------------------------------------------
 
@@ -87,10 +100,72 @@ data ConnOptions = ConnOptions
   }
   deriving stock (Eq, Read, Show)
 
+-- | The data needed to establish a postgres connection, isomorphic  to a
+-- postgres connection string, with the recent addition that this can be
+-- dynamic: effectively an IO action That returns a connection string (the use
+-- case we're trying to support is databases with frequently-rotated secrets)
 data ConnDetails
   = CDDatabaseURI !ByteString
   | CDOptions !ConnOptions
+  | -- | A database URI meant to be read dynamically at connection initialization
+    -- time, by reading the URI from the file
+    CDDynamicDatabaseURI !FilePath
   deriving stock (Eq, Read, Show)
+
+-- | strips string, performs no validation
+readDynamicURIFile :: FilePath -> IO Text
+readDynamicURIFile path = do
+  uriDirty <-
+    readFileUtf8 path `catch` \(SomeException e) ->
+      throwIO $
+        PGConnErr $
+          "Error reading connection string dynamically from "
+            <> Text.pack path
+            <> ": "
+            <> Text.pack (show e)
+  pure $ encodeURLPassword $ Text.strip uriDirty
+  where
+    -- Text.readFile but explicit, ignoring locale:
+    readFileUtf8 = fmap decodeUtf8 . BS.readFile
+
+-- | If we connect with a 'CDDatabaseURI', we may still be able to create a
+-- 'ConnOptions' object from the URI.
+extractConnOptions :: ConnDetails -> Maybe ConnOptions
+extractConnOptions = \case
+  CDDynamicDatabaseURI _ -> Nothing -- TODO MAYBE: to support this we'd need to be in IO
+  CDOptions options -> Just options
+  CDDatabaseURI uri -> do
+    options <- case Options.parseConnectionString (unpack uri) of
+      Right options -> Just options
+      Left _ -> Nothing
+
+    getLast do
+      connHost <- Options.host options
+      connPort <- Options.port options
+      connUser <- Options.user options
+      connPassword <- Options.password options
+      connDatabase <- Options.dbname options
+
+      let connOptions :: Maybe String
+          connOptions = getLast (Options.options options)
+
+      pure ConnOptions {..}
+
+-- | Attempt to extract a host name from a 'ConnDetails'. Note that this cannot
+-- just reuse 'extractConnOptions' as a URI may specify a host while not
+-- specifying a port, for example.
+--
+-- NOTE: this is in @IO@ due to @CDDynamicDatabaseURI@
+extractHost :: ConnDetails -> IO (Maybe String)
+extractHost = \case
+  CDDynamicDatabaseURI path -> parseURI . Text.unpack <$> readDynamicURIFile path
+  CDOptions options -> pure $ Just (connHost options)
+  CDDatabaseURI uri -> pure $ parseURI (unpack uri)
+  where
+    parseURI uri = getLast do
+      case Options.parseConnectionString uri of
+        Right options -> Options.host options
+        Left _ -> mempty
 
 data ConnInfo = ConnInfo
   { ciRetries :: !Int,
@@ -114,7 +189,7 @@ type PGRetryPolicyM m = RetryPolicyM m
 
 type PGRetryPolicy = PGRetryPolicyM (ExceptT PGErrInternal IO)
 
-newtype PGLogEvent = PLERetryMsg Text
+newtype PGLogEvent = PLERetryMsg Value
   deriving stock (Eq, Show)
 
 type PGLogger = PGLogEvent -> IO ()
@@ -138,12 +213,14 @@ readConnErr conn = do
 
 pgRetrying ::
   (MonadIO m) =>
+  Maybe String ->
+  -- | An action to perform on error
   IO () ->
   PGRetryPolicyM m ->
   PGLogger ->
   m (Either PGConnErr a) ->
   m a
-pgRetrying resetFn retryP logger action = do
+pgRetrying host resetFn retryP logger action = do
   eRes <- Retry.retrying retryP shouldRetry $ const action
   either (liftIO . throwIO) return eRes
   where
@@ -155,9 +232,11 @@ pgRetrying resetFn retryP logger action = do
       liftIO $ do
         logger $
           PLERetryMsg $
-            "postgres connection failed, retrying("
-              <> Text.pack (show retryIterNo)
-              <> ")."
+            object
+              [ "message" .= String "Postgres connection failed",
+                "retry_attempt" .= retryIterNo,
+                "host" .= fromMaybe "Unknown or invalid host" host
+              ]
         resetFn
       return True
 
@@ -167,18 +246,48 @@ initPQConn ::
   ConnInfo ->
   PGLogger ->
   IO PQ.Connection
-initPQConn ci logger =
+initPQConn ci logger = do
+  host <- extractHost (ciDetails ci)
+  -- if this is a dynamic connection, we'll signal to refresh the secret (if
+  -- configured) during each retry, ensuring we don't make too many connection
+  -- attempts with the wrong credentials and risk getting locked out
+  resetFn <- do
+    mbUrl <- lookupEnv "HASURA_SECRETS_BLOCKING_FORCE_REFRESH_URL"
+    case (mbUrl, ciDetails ci) of
+      (Just url, CDDynamicDatabaseURI path) -> do
+        manager <- newManager defaultManagerSettings
+
+        -- Create the request
+        let body = encode $ object ["filename" .= path]
+        initialRequest <- parseRequest url
+        let request =
+              initialRequest
+                { method = "POST",
+                  requestBody = RequestBodyLBS body,
+                  requestHeaders = [("Content-Type", "application/json")]
+                }
+
+        -- The action to perform on each retry. This must only return after
+        -- the secrets file has been refreshed.
+        return $ do
+          status <- statusCode . responseStatus <$> httpLbs request manager
+          unless (status >= 200 && status < 300) $
+            logger $
+              PLERetryMsg $
+                object
+                  ["message" .= String "Forcing refresh of secret file at HASURA_SECRETS_BLOCKING_FORCE_REFRESH_URL seems to have failed. Retrying anyway."]
+      _ -> pure $ pure ()
+
   -- Retry if postgres connection error occurs
-  pgRetrying resetFn retryP logger $ do
+  pgRetrying host resetFn retryP logger $ do
     -- Initialise the connection
-    conn <- PQ.connectdb (pgConnString $ ciDetails ci)
+    conn <- PQ.connectdb =<< pgConnString (ciDetails ci)
 
     -- Check the status of the connection
     s <- liftIO $ PQ.status conn
     let connOk = s == PQ.ConnectionOk
     bool (whenConnNotOk conn) (whenConnOk conn) connOk
   where
-    resetFn = return ()
     retryP = mkPGRetryPolicy $ ciRetries ci
 
     whenConnNotOk conn = Left . PGConnErr <$> readConnErr conn
@@ -226,9 +335,11 @@ defaultConnInfo = ConnInfo 0 details
             connOptions = Nothing
           }
 
-pgConnString :: ConnDetails -> ByteString
-pgConnString (CDDatabaseURI uri) = uri
-pgConnString (CDOptions opts) = fromString connstr
+-- | NOTE: in @IO@ due to @CDDynamicDatabaseURI@. Connection string might be invalid
+pgConnString :: ConnDetails -> IO ByteString
+pgConnString (CDDynamicDatabaseURI path) = encodeUtf8 <$> readDynamicURIFile path
+pgConnString (CDDatabaseURI uri) = pure uri
+pgConnString (CDOptions opts) = pure $ fromString connstr
   where
     connstr =
       str "host=" connHost $
@@ -296,8 +407,10 @@ retryOnConnErr ::
   PGConn ->
   PGExec a ->
   ExceptT PGErrInternal IO a
-retryOnConnErr pgConn action =
-  pgRetrying resetFn retryP logger $ do
+retryOnConnErr pgConn action = do
+  host <- lift $ fmap (fmap unpack) (PQ.host (pgPQConn pgConn))
+
+  pgRetrying host resetFn retryP logger $ do
     resE <- lift $ runExceptT action
     case resE of
       Right r -> return $ Right r
@@ -305,7 +418,7 @@ retryOnConnErr pgConn action =
       Left (Right pgConnErr) -> return $ Left pgConnErr
   where
     resetFn = resetPGConn pgConn
-    PGConn _ _ _ retryP logger _ _ _ _ = pgConn
+    PGConn _ _ _ _ retryP logger _ _ _ _ = pgConn
 
 checkResult ::
   PQ.Connection ->
@@ -429,7 +542,9 @@ mkPGRetryPolicy numRetries =
     baseDelay = 100 * 1000 -- 0.1 second
 
 data PGConn = PGConn
-  { pgPQConn :: !PQ.Connection,
+  { -- | Debugging context.
+    pgContext :: !Value,
+    pgPQConn :: !PQ.Connection,
     pgAllowPrepare :: !Bool,
     -- | Cancel command execution when interrupted by any asynchronous exception.
     --   On receiving an asynchronous exception, a cancel message is sent to
@@ -446,7 +561,7 @@ data PGConn = PGConn
   }
 
 resetPGConn :: PGConn -> IO ()
-resetPGConn (PGConn conn _ _ _ _ ctr ht _ _) = do
+resetPGConn (PGConn _ conn _ _ _ _ ctr ht _ _) = do
   -- Reset LibPQ connection
   PQ.reset conn
   -- Set counter to 0
@@ -491,7 +606,7 @@ prepare ::
   Template ->
   [PQ.Oid] ->
   PGExec RemoteKey
-prepare (PGConn conn _ _ _ _ counter table _ _) tpl@(Template tplBytes) tl = do
+prepare (PGConn _ conn _ _ _ _ counter table _ _) tpl@(Template tplBytes) tl = do
   let lk = localKey tpl tl
   rkm <- lift $ HIO.lookup table lk
   case rkm of
@@ -541,7 +656,7 @@ execQuery pgConn pgQuery = do
         allowPrepare && preparable
   withExceptT PGIUnexpected $ convF resOk
   where
-    PGConn conn allowPrepare cancelable _ _ _ _ _ _ = pgConn
+    PGConn _ conn allowPrepare cancelable _ _ _ _ _ _ = pgConn
     PGQuery tpl@(Template tplBytes) params preparable convF = pgQuery
     run = bool lift (cancelOnAsync conn) cancelable
     withoutPrepare = do
@@ -568,7 +683,7 @@ execMulti pgConn (Template t) convF = do
     checkResult conn mRes
   withExceptT PGIUnexpected $ convF resOk
   where
-    PGConn conn _ cancelable _ _ _ _ _ _ = pgConn
+    PGConn _ conn _ cancelable _ _ _ _ _ _ = pgConn
 
 -- | Extract the description of a prepared statement.
 describePrepared ::

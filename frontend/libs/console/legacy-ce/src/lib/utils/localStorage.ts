@@ -119,12 +119,14 @@ export const LS_KEYS = {
   permissionConfirmationModalStatus:
     'console:permissionConfirmationModalStatus',
   neonCallbackSearch: 'neon:authCallbackSearch',
+  slackCallbackSearch: 'slack:authCallbackSearch',
   herokuCallbackSearch: 'HEROKU_CALLBACK_SEARCH',
   consolePersonalAccessToken: 'PERSONAL_ACCESS_TOKEN',
   notificationsData: 'notifications:data',
   notificationsLastSeen: 'notifications:lastSeen',
   authState: 'AUTH_STATE',
   skipOnboarding: 'SKIP_CLOUD_ONBOARDING',
+  lastViewedSchemaChange: 'LAST_VIEWED_SCHEMA_CHANGE',
 };
 
 export const clearGraphiqlLS = () => {

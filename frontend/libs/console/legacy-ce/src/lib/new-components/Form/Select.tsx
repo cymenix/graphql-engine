@@ -73,6 +73,10 @@ export const Select: React.VFC<SelectProps> = ({
         data-test={dataTest}
         data-testid={wrapperProps.dataTestId || name}
         {...register(name)}
+        // onChange={e => {
+        //   register(name).onChange(e);
+
+        // }}
       >
         {placeholder ? (
           <option value="" data-default-selected hidden>
@@ -81,7 +85,11 @@ export const Select: React.VFC<SelectProps> = ({
         ) : null}
 
         {options.map(({ label, value, disabled: optionDisabled = false }) => (
-          <option key={value} {...{ value, disabled: optionDisabled }}>
+          <option
+            key={value}
+            data-testid={(wrapperProps.dataTestId || name) + '-' + value}
+            {...{ value, disabled: optionDisabled }}
+          >
             {label}
           </option>
         ))}

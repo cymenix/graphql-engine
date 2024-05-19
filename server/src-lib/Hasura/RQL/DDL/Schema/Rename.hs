@@ -162,7 +162,8 @@ renameColumnInMetadata ::
   ( MonadError QErr m,
     CacheRM m,
     MonadWriter MetadataModifier m,
-    BackendMetadata b
+    BackendMetadata b,
+    Column b ~ ColumnPath b
   ) =>
   Column b ->
   Column b ->
@@ -301,9 +302,11 @@ updateRelDefs source qt rn renameTable = do
     updateObjRelDef (oldQT, newQT) =
       rdUsing %~ \case
         RUFKeyOn fk -> RUFKeyOn fk
-        RUManual (RelManualTableConfig origQT (RelManualCommon rmCols rmIO)) ->
+        RUManual (RelManualTableConfig (RelManualTableConfigC origQT (RelManualCommon rmCols rmIO))) ->
           let updQT = bool origQT newQT $ oldQT == origQT
-           in RUManual $ RelManualTableConfig updQT (RelManualCommon rmCols rmIO)
+           in RUManual $ RelManualTableConfig $ RelManualTableConfigC updQT (RelManualCommon rmCols rmIO)
+        RUManual (RelManualNativeQueryConfig nqc) ->
+          RUManual (RelManualNativeQueryConfig nqc)
 
     updateArrRelDef :: RenameTable b -> ArrRelDef b -> ArrRelDef b
     updateArrRelDef (oldQT, newQT) =
@@ -311,9 +314,11 @@ updateRelDefs source qt rn renameTable = do
         RUFKeyOn (ArrRelUsingFKeyOn origQT c) ->
           let updQT = getUpdQT origQT
            in RUFKeyOn $ ArrRelUsingFKeyOn updQT c
-        RUManual (RelManualTableConfig origQT (RelManualCommon rmCols rmIO)) ->
+        RUManual (RelManualTableConfig (RelManualTableConfigC origQT (RelManualCommon rmCols rmIO))) ->
           let updQT = getUpdQT origQT
-           in RUManual $ RelManualTableConfig updQT (RelManualCommon rmCols rmIO)
+           in RUManual $ RelManualTableConfig $ RelManualTableConfigC updQT (RelManualCommon rmCols rmIO)
+        RUManual (RelManualNativeQueryConfig nqc) ->
+          RUManual (RelManualNativeQueryConfig nqc)
       where
         getUpdQT origQT = bool origQT newQT $ oldQT == origQT
 
@@ -358,16 +363,16 @@ updateInsPermFlds ::
   Rename b ->
   PermDefPermission b InsPerm ->
   m (PermDefPermission b InsPerm)
-updateInsPermFlds refQT rename (InsPerm' (InsPerm chk preset cols backendOnly)) =
+updateInsPermFlds refQT rename (InsPerm' (InsPerm chk preset cols backendOnly validateInput)) =
   case rename of
     RTable rt -> do
       let updChk = updateTableInBoolExp rt chk
-      pure $ InsPerm' $ InsPerm updChk preset cols backendOnly
+      pure $ InsPerm' $ InsPerm updChk preset cols backendOnly validateInput
     RField rf -> do
       updChk <- updateFieldInBoolExp refQT rf chk
       let updPresetM = updatePreset refQT rf <$> preset
           updColsM = updateCols refQT rf <$> cols
-      pure $ InsPerm' $ InsPerm updChk updPresetM updColsM backendOnly
+      pure $ InsPerm' $ InsPerm updChk updPresetM updColsM backendOnly validateInput
 
 updateSelPermFlds ::
   (MonadReader (TableCache b) m, Backend b) =>
@@ -391,18 +396,18 @@ updateUpdPermFlds ::
   Rename b ->
   PermDefPermission b UpdPerm ->
   m (PermDefPermission b UpdPerm)
-updateUpdPermFlds refQT rename (UpdPerm' (UpdPerm cols preset fltr check backendOnly)) = do
+updateUpdPermFlds refQT rename (UpdPerm' (UpdPerm cols preset fltr check backendOnly validateInput)) = do
   case rename of
     RTable rt -> do
       let updFltr = updateTableInBoolExp rt fltr
           updCheck = fmap (updateTableInBoolExp rt) check
-      pure $ UpdPerm' $ UpdPerm cols preset updFltr updCheck backendOnly
+      pure $ UpdPerm' $ UpdPerm cols preset updFltr updCheck backendOnly validateInput
     RField rf -> do
       updFltr <- updateFieldInBoolExp refQT rf fltr
       updCheck <- traverse (updateFieldInBoolExp refQT rf) check
       let updCols = updateCols refQT rf cols
           updPresetM = updatePreset refQT rf <$> preset
-      pure $ UpdPerm' $ UpdPerm updCols updPresetM updFltr updCheck backendOnly
+      pure $ UpdPerm' $ UpdPerm updCols updPresetM updFltr updCheck backendOnly validateInput
 
 updateDelPermFlds ::
   (MonadReader (TableCache b) m, Backend b) =>
@@ -410,14 +415,14 @@ updateDelPermFlds ::
   Rename b ->
   PermDefPermission b DelPerm ->
   m (PermDefPermission b DelPerm)
-updateDelPermFlds refQT rename (DelPerm' (DelPerm fltr backendOnly)) = do
+updateDelPermFlds refQT rename (DelPerm' (DelPerm fltr backendOnly validateInput)) = do
   case rename of
     RTable rt -> do
       let updFltr = updateTableInBoolExp rt fltr
-      pure $ DelPerm' $ DelPerm updFltr backendOnly
+      pure $ DelPerm' $ DelPerm updFltr backendOnly validateInput
     RField rf -> do
       updFltr <- updateFieldInBoolExp refQT rf fltr
-      pure $ DelPerm' $ DelPerm updFltr backendOnly
+      pure $ DelPerm' $ DelPerm updFltr backendOnly validateInput
 
 updatePreset ::
   (Backend b) =>
@@ -528,7 +533,7 @@ updateColExp qt rf (ColExp fld val) =
 -- rename columns in relationship definitions
 updateColInRel ::
   forall b m.
-  (CacheRM m, MonadWriter MetadataModifier m, BackendMetadata b) =>
+  (CacheRM m, MonadWriter MetadataModifier m, BackendMetadata b, Column b ~ ColumnPath b) =>
   SourceName ->
   TableName b ->
   RelName ->
@@ -677,7 +682,7 @@ updateTableInRemoteRelationshipRHS source tableName remoteRelationshipName (_, n
     .~ toJSON newTableName
 
 updateColInObjRel ::
-  (Backend b) =>
+  (Backend b, Column b ~ ColumnPath b) =>
   TableName b ->
   TableName b ->
   RenameCol b ->
@@ -690,7 +695,7 @@ updateColInObjRel fromQT toQT rnCol = \case
     RUManual $ updateRelManualConfig fromQT toQT rnCol manConfig
 
 updateRelChoice ::
-  (Backend b) =>
+  (Backend b, Column b ~ ColumnPath b) =>
   TableName b ->
   TableName b ->
   RenameCol b ->
@@ -702,7 +707,7 @@ updateRelChoice fromQT toQT rnCol =
     RemoteTable t c -> RemoteTable t (getNewCol rnCol toQT c)
 
 updateColInArrRel ::
-  (Backend b) =>
+  (Backend b, Column b ~ ColumnPath b) =>
   TableName b ->
   TableName b ->
   RenameCol b ->
@@ -713,8 +718,6 @@ updateColInArrRel fromQT toQT rnCol = \case
     let updCol = getNewCol rnCol toQT c
      in RUFKeyOn $ ArrRelUsingFKeyOn t updCol
   RUManual manConfig -> RUManual $ updateRelManualConfig fromQT toQT rnCol manConfig
-
-type ColMap b = HashMap (Column b) (Column b)
 
 getNewCol ::
   forall b f.
@@ -737,25 +740,27 @@ getNewCol rnCol qt cols =
 
 updateRelManualConfig ::
   forall b.
-  (Backend b) =>
+  (Backend b, Column b ~ ColumnPath b) =>
   TableName b ->
   TableName b ->
   RenameCol b ->
-  RelManualTableConfig b ->
-  RelManualTableConfig b
-updateRelManualConfig fromQT toQT rnCol (RelManualTableConfig tn (RelManualCommon colMap io)) =
-  RelManualTableConfig tn (RelManualCommon (updateColMap fromQT toQT rnCol colMap) io)
+  RelManualConfig b ->
+  RelManualConfig b
+updateRelManualConfig fromQT toQT rnCol (RelManualTableConfig (RelManualTableConfigC tn (RelManualCommon colMap io))) =
+  RelManualTableConfig (RelManualTableConfigC tn (RelManualCommon (updateColMap fromQT toQT rnCol colMap) io))
+updateRelManualConfig fromQT toQT rnCol (RelManualNativeQueryConfig (RelManualNativeQueryConfigC nqn (RelManualCommon colMap io))) =
+  RelManualNativeQueryConfig (RelManualNativeQueryConfigC nqn (RelManualCommon (updateColMap fromQT toQT rnCol colMap) io))
 
 updateColMap ::
   forall b.
-  (Backend b) =>
+  (Backend b, Column b ~ ColumnPath b) =>
   TableName b ->
   TableName b ->
   RenameCol b ->
-  ColMap b ->
-  ColMap b
+  RelMapping b ->
+  RelMapping b
 updateColMap fromQT toQT rnCol =
-  HashMap.fromList . map (modCol fromQT *** modCol toQT) . HashMap.toList
+  RelMapping . HashMap.fromList . map (modCol fromQT *** modCol toQT) . HashMap.toList . unRelMapping
   where
     RenameItem qt oCol nCol = rnCol
     modCol colQt col = if colQt == qt && col == oCol then nCol else col

@@ -73,7 +73,7 @@ mainParserSpec =
         Opt.Failure _pf -> pure ()
         Opt.CompletionInvoked cr -> Hspec.expectationFailure $ show cr
 
-    Hspec.it "Accepts '--database-url' with a valid URLTemplate argument" $ do
+    Hspec.it "Accepts '--database-url' with a valid Template argument" $ do
       let -- Given
           parserInfo = Opt.info (UUT.parseHgeOpts @Logging.Hasura Opt.<**> Opt.helper) Opt.fullDesc
           -- When
@@ -82,7 +82,7 @@ mainParserSpec =
           result = Opt.execParserPure Opt.defaultPrefs parserInfo argInput
 
       fmap (preview (UUT.horDatabaseUrl . UUT.pciDatabaseConn . _Just . UUT._PGConnDatabaseUrl)) result `Hspec.shouldSatisfy` \case
-        Opt.Success template -> template == eitherToMaybe (Template.parseURLTemplate "https://hasura.io/{{foo}}")
+        Opt.Success template -> template == eitherToMaybe (Template.parseTemplate "https://hasura.io/{{foo}}")
         Opt.Failure _pf -> False
         Opt.CompletionInvoked _cr -> False
 
@@ -2094,5 +2094,18 @@ serveParserSpec =
 
       fmap UUT.rsoApolloFederationStatus result `Hspec.shouldSatisfy` \case
         Opt.Success enableApolloFederation -> enableApolloFederation == (Just Types.ApolloFederationEnabled)
+        Opt.Failure _pf -> False
+        Opt.CompletionInvoked _cr -> False
+
+    Hspec.it "It accepts '--disable-close-websockets-on-metadata-change'" $ do
+      let -- Given
+          parserInfo = Opt.info (UUT.serveCommandParser @Logging.Hasura Opt.<**> Opt.helper) Opt.fullDesc
+          -- When
+          argInput = ["--disable-close-websockets-on-metadata-change"]
+          -- Then
+          result = Opt.execParserPure Opt.defaultPrefs parserInfo argInput
+
+      fmap UUT.rsoCloseWebsocketsOnMetadataChangeStatus result `Hspec.shouldSatisfy` \case
+        Opt.Success disableCloseWebsocketsOnMetadataChange -> disableCloseWebsocketsOnMetadataChange == (Just Types.CWMCDisabled)
         Opt.Failure _pf -> False
         Opt.CompletionInvoked _cr -> False

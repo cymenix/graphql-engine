@@ -14,27 +14,33 @@ describe('openTelemetryToFormValues', () => {
       resource_attributes: [],
       protocol: 'http/protobuf',
       headers: [{ name: 'baz', value: 'qux' }],
-      otlp_traces_endpoint: 'https://hasura.io',
+      otlp_traces_endpoint: 'https://hasura.io/v1/traces',
+      otlp_metrics_endpoint: 'https://hasura.io/v1/metrics',
+      otlp_logs_endpoint: 'https://hasura.io/v1/logs',
+      traces_propagators: ['b3'],
     },
 
-    data_types: ['traces'],
+    data_types: ['traces', 'metrics', 'logs'],
     batch_span_processor: {
       max_export_batch_size: 100,
     },
   };
 
   const formValues: FormValues = {
-    enabled: false,
+    status: 'disabled',
+    statusVariable: '',
 
     batchSize: 100,
     attributes: [],
-    endpoint: 'https://hasura.io',
+    logsEndpoint: 'https://hasura.io/v1/logs',
+    tracesEndpoint: 'https://hasura.io/v1/traces',
+    metricsEndpoint: 'https://hasura.io/v1/metrics',
     headers: [{ name: 'baz', value: 'qux', type: 'from_value' }],
 
-    // At the beginning, only one Data Type is available
-    dataType: ['traces'],
+    dataType: ['traces', 'metrics', 'logs'],
     // At the beginning, only one Connection Type is available
     connectionType: 'http/protobuf',
+    tracesPropagators: ['b3'],
   };
 
   it('When passed with a OpenTelemetry, should return the same values for the form', () => {
@@ -48,17 +54,21 @@ describe('openTelemetryToFormValues', () => {
   it('When passed with a disabled configuration and an empty endpoint, should strip out the endpoint from the OpenTelemetry that must be sent to the server', () => {
     expect(
       formValuesToOpenTelemetry({
-        enabled: false,
+        status: 'disabled',
+        statusVariable: '',
 
         batchSize: 100,
         attributes: [],
-        endpoint: '',
+        tracesEndpoint: '',
+        metricsEndpoint: '',
+        logsEndpoint: '',
         headers: [{ name: 'baz', value: 'qux', type: 'from_value' }],
 
         // At the beginning, only one Data Type is available
         dataType: ['traces'],
         // At the beginning, only one Connection Type is available
         connectionType: 'http/protobuf',
+        tracesPropagators: ['b3'],
       })
     ).toEqual({
       status: 'disabled',
@@ -67,6 +77,7 @@ describe('openTelemetryToFormValues', () => {
         resource_attributes: [],
         protocol: 'http/protobuf',
         headers: [{ name: 'baz', value: 'qux' }],
+        traces_propagators: ['b3'],
       },
 
       data_types: ['traces'],

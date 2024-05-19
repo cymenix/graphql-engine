@@ -11,6 +11,7 @@
 module Hasura.RQL.IR.Generator
   ( genAnnBoolExp,
     genAnnBoolExpFld,
+    genAnnRedactionExp,
     genAnnotatedOrderByItemG,
     genAnnotatedOrderByElement,
     genAnnotatedAggregateOrderBy,
@@ -57,6 +58,50 @@ genFunctionArgsExpG genA =
     <$> list defaultRange genA
     <*> genHashMap (genArbitraryUnicodeText defaultRange) genA defaultRange
 
+genAnnRedactionExp ::
+  (MonadGen m) =>
+  (Hashable (ScalarType b)) =>
+  (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
+  m (Column b) ->
+  m (ColumnPath b) ->
+  m (TableName b) ->
+  m (ScalarType b) ->
+  m (FunctionName b) ->
+  m (XComputedField b) ->
+  m (BooleanOperators b a) ->
+  m (FunctionArgumentExp b a) ->
+  m a ->
+  m (AnnRedactionExp b a)
+genAnnRedactionExp
+  genColumn
+  genColumnPath
+  genTableName
+  genScalarType
+  genFunctionName
+  genXComputedField
+  genBooleanOperators
+  genFunctionArgumentExp
+  genA =
+    recursive
+      choice
+      [pure NoRedaction]
+      [ RedactIfFalse
+          <$> genAnnBoolExp
+            ( genAnnBoolExpFld
+                genColumn
+                genColumnPath
+                genTableName
+                genScalarType
+                genFunctionName
+                genXComputedField
+                genBooleanOperators
+                genFunctionArgumentExp
+                genA
+            )
+            genTableName
+      ]
+
 genGExists ::
   (MonadGen m) =>
   m a ->
@@ -88,7 +133,9 @@ genAnnBoolExpFld ::
   (MonadGen m) =>
   (Hashable (ScalarType b)) =>
   (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (Column b) ->
+  m (ColumnPath b) ->
   m (TableName b) ->
   m (ScalarType b) ->
   m (FunctionName b) ->
@@ -99,6 +146,7 @@ genAnnBoolExpFld ::
   m (AnnBoolExpFld b a)
 genAnnBoolExpFld
   genColumn
+  genColumnPath
   genTableName
   genScalarType
   genFunctionName
@@ -114,6 +162,16 @@ genAnnBoolExpFld
             genColumn
             genTableName
             genScalarType
+          <*> genAnnRedactionExp
+            genColumn
+            genColumnPath
+            genTableName
+            genScalarType
+            genFunctionName
+            genXComputedField
+            genBooleanOperators
+            genFunctionArgumentExp
+            genA
           <*> list
             defaultRange
             ( genOpExpG
@@ -125,11 +183,12 @@ genAnnBoolExpFld
             )
       relationship =
         AVRelationship
-          <$> genRelInfo genTableName genColumn
+          <$> genRelInfo genTableName genColumnPath
           <*> ( RelationshipFilters
                   <$> genAnnBoolExp
                     ( genAnnBoolExpFld
                         genColumn
+                        genColumnPath
                         genTableName
                         genScalarType
                         genFunctionName
@@ -142,6 +201,7 @@ genAnnBoolExpFld
                   <*> genAnnBoolExp
                     ( genAnnBoolExpFld
                         genColumn
+                        genColumnPath
                         genTableName
                         genScalarType
                         genFunctionName
@@ -157,6 +217,7 @@ genAnnBoolExpFld
           <$> genAnnComputedFieldBolExp
             genTableName
             genColumn
+            genColumnPath
             genScalarType
             genBooleanOperators
             genXComputedField
@@ -166,15 +227,15 @@ genAnnBoolExpFld
 
 genRelInfo ::
   (MonadGen m) =>
-  (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (TableName b) ->
-  m (Column b) ->
+  m (ColumnPath b) ->
   m (RelInfo b)
 genRelInfo genTableName genColumn =
   RelInfo
     <$> genRelName
     <*> genRelType
-    <*> genHashMap genColumn genColumn defaultRange
+    <*> (RelMapping <$> genHashMap genColumn genColumn defaultRange)
     <*> genRelTarget genTableName
     <*> bool_
     <*> genInsertOrder
@@ -202,8 +263,10 @@ genAnnComputedFieldBolExp ::
   (MonadGen m) =>
   (Hashable (ScalarType b)) =>
   (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (TableName b) ->
   m (Column b) ->
+  m (ColumnPath b) ->
   m (ScalarType b) ->
   m (BooleanOperators b a) ->
   m (XComputedField b) ->
@@ -214,6 +277,7 @@ genAnnComputedFieldBolExp ::
 genAnnComputedFieldBolExp
   genTableName
   genColumn
+  genColumnPath
   genScalarType
   genBooleanOperators
   genXComputedField
@@ -228,6 +292,7 @@ genAnnComputedFieldBolExp
       <*> genComputedFieldBoolExp
         genTableName
         genColumn
+        genColumnPath
         genScalarType
         genFunctionName
         genXComputedField
@@ -239,8 +304,10 @@ genComputedFieldBoolExp ::
   (MonadGen m) =>
   (Hashable (ScalarType b)) =>
   (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (TableName b) ->
   m (Column b) ->
+  m (ColumnPath b) ->
   m (ScalarType b) ->
   m (FunctionName b) ->
   m (XComputedField b) ->
@@ -251,6 +318,7 @@ genComputedFieldBoolExp ::
 genComputedFieldBoolExp
   genTableName
   genColumn
+  genColumnPath
   genScalarType
   genFunctionName
   genXComputedField
@@ -259,7 +327,17 @@ genComputedFieldBoolExp
   genA =
     choice
       [ CFBEScalar
-          <$> list
+          <$> genAnnRedactionExp
+            genColumn
+            genColumnPath
+            genTableName
+            genScalarType
+            genFunctionName
+            genXComputedField
+            genBooleanOperators
+            genFunctionArgumentExp
+            genA
+          <*> list
             defaultRange
             ( genOpExpG
                 genTableName
@@ -273,6 +351,7 @@ genComputedFieldBoolExp
           <*> genAnnBoolExp
             ( genAnnBoolExpFld
                 genColumn
+                genColumnPath
                 genTableName
                 genScalarType
                 genFunctionName
@@ -333,8 +412,8 @@ genOpExpG genTableName genColumn genScalarType genBooleanOperators genA =
                 genA
           )
           defaultRange
-    aeq = AEQ <$> bool_ <*> genA
-    ane = ANE <$> bool_ <*> genA
+    aeq = AEQ <$> nullableComparison <*> genA
+    ane = ANE <$> nullableComparison <*> genA
     ain = AIN <$> genA
     anin = ANIN <$> genA
     agt = AGT <$> genA
@@ -352,6 +431,11 @@ genOpExpG genTableName genColumn genScalarType genBooleanOperators genA =
     anIsNull = pure ANISNULL
     anIsNotNull = pure ANISNOTNULL
     aBackendSpecific = ABackendSpecific <$> genBooleanOperators
+
+    nullableComparison =
+      bool_ <&> \case
+        True -> NonNullableComparison
+        False -> NullableComparison
 
     genRootOrCurrent = element [IsRoot, IsCurrent]
 
@@ -428,7 +512,9 @@ genAnnotatedOrderByElement ::
   (MonadGen m) =>
   (Hashable (ScalarType b)) =>
   (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (Column b) ->
+  m (ColumnPath b) ->
   m (TableName b) ->
   m (ScalarType b) ->
   m (FunctionName b) ->
@@ -439,6 +525,7 @@ genAnnotatedOrderByElement ::
   m (AnnotatedOrderByElement b a)
 genAnnotatedOrderByElement
   genColumn
+  genColumnPath
   genTableName
   genScalarType
   genFunctionName
@@ -459,12 +546,23 @@ genAnnotatedOrderByElement
             genColumn
             genTableName
             genScalarType
+          <*> genAnnRedactionExp
+            genColumn
+            genColumnPath
+            genTableName
+            genScalarType
+            genFunctionName
+            genXComputedField
+            genBooleanOperators
+            genFunctionArgumentExp
+            genA
       objectRelation =
         AOCObjectRelation
-          <$> genRelInfo genTableName genColumn
+          <$> genRelInfo genTableName genColumnPath
           <*> genAnnBoolExp
             ( genAnnBoolExpFld
                 genColumn
+                genColumnPath
                 genTableName
                 genScalarType
                 genFunctionName
@@ -476,6 +574,7 @@ genAnnotatedOrderByElement
             genTableName
           <*> genAnnotatedOrderByElement
             genColumn
+            genColumnPath
             genTableName
             genScalarType
             genFunctionName
@@ -485,10 +584,11 @@ genAnnotatedOrderByElement
             genA
       arrayAggregation =
         AOCArrayAggregation
-          <$> genRelInfo genTableName genColumn
+          <$> genRelInfo genTableName genColumnPath
           <*> genAnnBoolExp
             ( genAnnBoolExpFld
                 genColumn
+                genColumnPath
                 genTableName
                 genScalarType
                 genFunctionName
@@ -500,12 +600,19 @@ genAnnotatedOrderByElement
             genTableName
           <*> genAnnotatedAggregateOrderBy
             genColumn
+            genColumnPath
             genTableName
             genScalarType
+            genFunctionName
+            genXComputedField
+            genBooleanOperators
+            genFunctionArgumentExp
+            genA
       computedField =
         AOCComputedField
           <$> genComputedFieldOrderBy
             genColumn
+            genColumnPath
             genScalarType
             genTableName
             genFunctionName
@@ -516,30 +623,59 @@ genAnnotatedOrderByElement
 
 genAnnotatedAggregateOrderBy ::
   (MonadGen m) =>
+  (Hashable (ScalarType b)) =>
+  (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (Column b) ->
+  m (ColumnPath b) ->
   m (TableName b) ->
   m (ScalarType b) ->
-  m (AnnotatedAggregateOrderBy b)
+  m (FunctionName b) ->
+  m (XComputedField b) ->
+  m (BooleanOperators b a) ->
+  m (FunctionArgumentExp b a) ->
+  m a ->
+  m (AnnotatedAggregateOrderBy b a)
 genAnnotatedAggregateOrderBy
   genColumn
+  genColumnPath
   genTableName
-  genScalarType =
+  genScalarType
+  genFunctionName
+  genXComputedField
+  genBooleanOperators
+  genFunctionArgumentExp
+  genA =
     choice
       [ pure AAOCount,
         AAOOp
-          <$> genArbitraryUnicodeText defaultRange
-          <*> genColumnType genTableName genScalarType
-          <*> genColumnInfo
-            genColumn
-            genTableName
-            genScalarType
+          <$> ( AggregateOrderByColumn
+                  <$> genArbitraryUnicodeText defaultRange
+                  <*> genColumnType genTableName genScalarType
+                  <*> genColumnInfo
+                    genColumn
+                    genTableName
+                    genScalarType
+                  <*> genAnnRedactionExp
+                    genColumn
+                    genColumnPath
+                    genTableName
+                    genScalarType
+                    genFunctionName
+                    genXComputedField
+                    genBooleanOperators
+                    genFunctionArgumentExp
+                    genA
+              )
       ]
 
 genComputedFieldOrderBy ::
   (MonadGen m) =>
   (Hashable (ScalarType b)) =>
   (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (Column b) ->
+  m (ColumnPath b) ->
   m (ScalarType b) ->
   m (TableName b) ->
   m (FunctionName b) ->
@@ -550,6 +686,7 @@ genComputedFieldOrderBy ::
   m (ComputedFieldOrderBy b a)
 genComputedFieldOrderBy
   genColumn
+  genColumnPath
   genScalarType
   genTableName
   genFunctionName
@@ -564,6 +701,7 @@ genComputedFieldOrderBy
       <*> genFunctionArgsExpG genFunctionArgumentExp
       <*> genComputedFieldOrderByElement
         genColumn
+        genColumnPath
         genScalarType
         genTableName
         genFunctionName
@@ -576,7 +714,9 @@ genComputedFieldOrderByElement ::
   (MonadGen m) =>
   (Hashable (ScalarType b)) =>
   (Hashable (Column b)) =>
+  (Hashable (ColumnPath b)) =>
   m (Column b) ->
+  m (ColumnPath b) ->
   m (ScalarType b) ->
   m (TableName b) ->
   m (FunctionName b) ->
@@ -587,6 +727,7 @@ genComputedFieldOrderByElement ::
   m (ComputedFieldOrderByElement b a)
 genComputedFieldOrderByElement
   genColumn
+  genColumnPath
   genScalarType
   genTableName
   genFunctionName
@@ -595,12 +736,24 @@ genComputedFieldOrderByElement
   genFunctionArgumentExp
   genA =
     choice
-      [ CFOBEScalar <$> genScalarType,
+      [ CFOBEScalar
+          <$> genScalarType
+          <*> genAnnRedactionExp
+            genColumn
+            genColumnPath
+            genTableName
+            genScalarType
+            genFunctionName
+            genXComputedField
+            genBooleanOperators
+            genFunctionArgumentExp
+            genA,
         CFOBETableAggregation
           <$> genTableName
           <*> genAnnBoolExp
             ( genAnnBoolExpFld
                 genColumn
+                genColumnPath
                 genTableName
                 genScalarType
                 genFunctionName
@@ -612,8 +765,14 @@ genComputedFieldOrderByElement
             genTableName
           <*> genAnnotatedAggregateOrderBy
             genColumn
+            genColumnPath
             genTableName
             genScalarType
+            genFunctionName
+            genXComputedField
+            genBooleanOperators
+            genFunctionArgumentExp
+            genA
       ]
 
 genIdentifier :: (MonadGen m) => m FIIdentifier

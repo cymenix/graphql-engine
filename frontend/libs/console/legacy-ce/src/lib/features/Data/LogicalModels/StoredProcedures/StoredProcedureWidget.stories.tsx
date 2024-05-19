@@ -54,10 +54,10 @@ export const BasicUserFlow: StoryObj<typeof StoredProcedureWidget> = {
         {},
         { timeout: 4000 }
       ),
-      'stored_procedure_1'
+      'dbo.stored_procedure_1'
     );
 
-    fireEvent.click(canvas.getByText('Add new argument'));
+    fireEvent.click(await canvas.findByText('Add new argument'));
     await userEvent.type(canvas.getByTestId('arguments[0].name'), 'id');
     await userEvent.selectOptions(
       canvas.getByTestId('arguments[0].type'),
@@ -108,10 +108,10 @@ export const ErrorWhileSaving: StoryObj<typeof StoredProcedureWidget> = {
         {},
         { timeout: 4000 }
       ),
-      'stored_procedure_1'
+      'dbo.stored_procedure_1'
     );
 
-    fireEvent.click(canvas.getByText('Add new argument'));
+    fireEvent.click(await canvas.findByText('Add new argument'));
     await userEvent.type(canvas.getByTestId('arguments[0].name'), 'id');
     await userEvent.selectOptions(
       canvas.getByTestId('arguments[0].type'),

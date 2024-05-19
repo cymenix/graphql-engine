@@ -15,6 +15,7 @@ import Control.Monad.Trans.Control (MonadBaseControl)
 import Data.Aeson qualified as J
 import Data.Aeson.Casing qualified as J
 import Data.Aeson.Ordered qualified as JO
+import Data.Environment qualified as Env
 import Data.Kind (Type)
 import Data.Text.Extended
 import Data.Text.NonEmpty (mkNonEmptyTextUnsafe)
@@ -24,10 +25,13 @@ import Hasura.GraphQL.Execute.Action.Types (ActionExecutionPlan)
 import Hasura.GraphQL.Execute.RemoteJoin.Types
 import Hasura.GraphQL.Execute.Subscription.Plan
 import Hasura.GraphQL.Namespace (RootFieldAlias, RootFieldMap)
+import Hasura.GraphQL.Parser.Variable qualified as G
 import Hasura.GraphQL.Transport.HTTP.Protocol qualified as GH
+import Hasura.Logging qualified as L
 import Hasura.Prelude
 import Hasura.QueryTags
 import Hasura.RQL.IR
+import Hasura.RQL.IR.ModelInformation
 import Hasura.RQL.Types.Action
 import Hasura.RQL.Types.Backend
 import Hasura.RQL.Types.BackendType
@@ -38,9 +42,12 @@ import Hasura.RQL.Types.ResultCustomization
 import Hasura.RQL.Types.Schema.Options qualified as Options
 import Hasura.RemoteSchema.SchemaCache
 import Hasura.SQL.AnyBackend qualified as AB
+import Hasura.Server.Types
 import Hasura.Session
 import Hasura.Tracing (MonadTrace)
+import Hasura.Tracing qualified as Tracing
 import Language.GraphQL.Draft.Syntax qualified as G
+import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types qualified as HTTP
 
 -- | This typeclass enacapsulates how a given backend translates a root field into an execution
@@ -65,7 +72,9 @@ class
     forall m.
     ( MonadError QErr m,
       MonadQueryTags m,
-      MonadReader QueryTagsComment m
+      MonadReader QueryTagsComment m,
+      MonadIO m,
+      MonadGetPolicies m
     ) =>
     UserInfo ->
     SourceName ->
@@ -73,13 +82,18 @@ class
     QueryDB b Void (UnpreparedValue b) ->
     [HTTP.Header] ->
     Maybe G.Name ->
-    m (DBStepInfo b)
+    m ((DBStepInfo b), [ModelInfoPart])
   mkDBMutationPlan ::
     forall m.
     ( MonadError QErr m,
+      MonadIO m,
       MonadQueryTags m,
-      MonadReader QueryTagsComment m
+      MonadReader QueryTagsComment m,
+      Tracing.MonadTrace m
     ) =>
+    Env.Environment ->
+    HTTP.Manager ->
+    L.Logger L.Hasura ->
     UserInfo ->
     Options.StringifyNumbers ->
     SourceName ->
@@ -87,7 +101,9 @@ class
     MutationDB b Void (UnpreparedValue b) ->
     [HTTP.Header] ->
     Maybe G.Name ->
-    m (DBStepInfo b)
+    Maybe (HashMap G.Name (G.Value G.Variable)) ->
+    HeaderPrecedence ->
+    m (DBStepInfo b, [ModelInfoPart])
   mkLiveQuerySubscriptionPlan ::
     forall m.
     ( MonadError QErr m,
@@ -102,7 +118,7 @@ class
     RootFieldMap (QueryDB b Void (UnpreparedValue b)) ->
     [HTTP.Header] ->
     Maybe G.Name ->
-    m (SubscriptionQueryPlan b (MultiplexedQuery b))
+    m (SubscriptionQueryPlan b (MultiplexedQuery b), [ModelInfoPart])
   mkDBStreamingSubscriptionPlan ::
     forall m.
     ( MonadError QErr m,
@@ -116,10 +132,11 @@ class
     (RootFieldAlias, (QueryDB b Void (UnpreparedValue b))) ->
     [HTTP.Header] ->
     Maybe G.Name ->
-    m (SubscriptionQueryPlan b (MultiplexedQuery b))
+    m (SubscriptionQueryPlan b (MultiplexedQuery b), [ModelInfoPart])
   mkDBQueryExplain ::
     forall m.
-    ( MonadError QErr m
+    ( MonadError QErr m,
+      MonadIO m
     ) =>
     RootFieldAlias ->
     UserInfo ->
@@ -140,7 +157,9 @@ class
   mkDBRemoteRelationshipPlan ::
     forall m.
     ( MonadError QErr m,
-      MonadQueryTags m
+      MonadQueryTags m,
+      MonadIO m,
+      MonadGetPolicies m
     ) =>
     UserInfo ->
     SourceName ->
@@ -159,7 +178,7 @@ class
     [HTTP.Header] ->
     Maybe G.Name ->
     Options.StringifyNumbers ->
-    m (DBStepInfo b)
+    m (DBStepInfo b, [ModelInfoPart])
 
 -- | This is a helper function to convert a remote source's relationship to a
 -- normal relationship to a temporary table. This function can be used to
@@ -169,7 +188,7 @@ convertRemoteSourceRelationship ::
   forall b.
   (Backend b) =>
   -- | Join columns for the relationship
-  HashMap (Column b) (Column b) ->
+  HashMap (ColumnPath b) (ColumnPath b) ->
   -- | The LHS of the join, this is the expression which selects from json
   -- objects
   SelectFromG b (UnpreparedValue b) ->
@@ -212,7 +231,7 @@ convertRemoteSourceRelationship
                 _acfType = argumentIdColumnType,
                 _acfAsText = False,
                 _acfArguments = Nothing,
-                _acfCaseBoolExpression = Nothing
+                _acfRedactionExpression = NoRedaction
               }
         )
 

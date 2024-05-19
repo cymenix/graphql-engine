@@ -6,6 +6,7 @@
 module Hasura.Base.Instances () where
 
 import Autodocodec qualified as AC
+import Control.Monad.Fail
 import Control.Monad.Fix
 import Data.Aeson qualified as J
 import Data.ByteString (ByteString)
@@ -43,7 +44,7 @@ instance NFData UT.Variable
 
 instance NFData UT.TemplateItem
 
-instance NFData UT.URLTemplate
+instance NFData UT.Template
 
 instance NFData C.StepField
 

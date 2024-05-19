@@ -15,6 +15,7 @@ import {
   prefetchEELicenseInfo,
   PageNotFound,
   dataHeaders,
+  loadAdminSecretState,
 } from '@hasura/console-legacy-ce';
 import {
   dataRouterUtils,
@@ -36,8 +37,7 @@ import {
   aboutContainer,
   ApiContainer,
   CreateRestView,
-  RestListView,
-  DetailsView,
+  RestEndpointList,
   InheritedRolesContainer,
   ApiLimits,
   IntrospectionOptions,
@@ -52,7 +52,7 @@ import {
   MultipleJWTSecretsPage,
   SingleSignOnPage,
   SchemaRegistryContainer,
-  SchemaDetailsView,
+  RestEndpointDetailsPage,
 } from '@hasura/console-legacy-ce';
 
 import AccessDeniedComponent from './components/AccessDenied/AccessDenied';
@@ -65,6 +65,7 @@ import { decodeToken, checkAccess } from './utils/computeAccess';
 import preLoginHook from './utils/preLoginHook';
 import metricsRouter from './components/Services/Metrics/MetricsRouter';
 import { notifyRouteChangeToAppcues } from './utils/appCues';
+import extendedGlobals from './Globals';
 
 const routes = store => {
   // load hasuractl migration status
@@ -289,6 +290,18 @@ const routes = store => {
     // ie. admin privileges are already checked in the login process
     if (globals.consoleType === 'pro-lite') return; // show security tab
 
+    // when consoleType === pro and if admin secret is provided, show security tab
+    if (
+      globals.consoleType === 'pro' &&
+      (extendedGlobals.adminSecret ||
+        loadAdminSecretState() ||
+        globals.adminSecret) &&
+      (extendedGlobals.adminSecret ||
+        loadAdminSecretState() ||
+        globals.adminSecret) !== ''
+    )
+      return;
+
     // cloud cli doesn't have any privileges when `hasura console` command is executed, it will only have previleges when `hasura pro console` is executed.
     // this will make sure that security tab is visible even when the users are running `hasura console` command with valid admin secret
     if (globals.consoleType === 'cloud' && globals.consoleMode === 'cli') {
@@ -329,10 +342,15 @@ const routes = store => {
           <Route path="rest">
             <IndexRedirect to="list" />
             <Route path="create" component={CreateRestView} />
-            <Route path="list" component={RestListView} />
-            <Route path="details/:name" component={DetailsView} />
+            <Route path="list" component={RestEndpointList} />
+            <Route path="details/:name" component={RestEndpointDetailsPage} />
             <Route path="edit/:name" component={CreateRestView} />
           </Route>
+          <Route path="schema-registry" component={SchemaRegistryContainer} />
+          <Route
+            path="schema-registry/:id"
+            component={SchemaRegistryContainer}
+          />
           <Route path="allow-list">
             <IndexRedirect to="detail" />
             <Route
@@ -372,7 +390,10 @@ const routes = store => {
           <Route path="settings" component={metadataContainer(connect)}>
             <IndexRedirect to="metadata-actions" />
             <Route path="schema-registry" component={SchemaRegistryContainer} />
-            <Route path="schema-registry/:id" component={SchemaDetailsView} />
+            <Route
+              path="schema-registry/:id"
+              component={SchemaRegistryContainer}
+            />
             <Route
               path="metadata-actions"
               component={metadataOptionsContainer(connect)}

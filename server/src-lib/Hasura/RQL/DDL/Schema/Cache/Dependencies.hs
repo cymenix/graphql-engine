@@ -16,6 +16,7 @@ import Hasura.Base.Error
 import Hasura.Function.Lenses (fiPermissions)
 import Hasura.LogicalModel.Cache (LogicalModelInfo (..))
 import Hasura.LogicalModel.Lenses (lmiPermissions)
+import Hasura.LogicalModel.Types (LogicalModelLocation (..))
 import Hasura.NativeQuery.Cache (NativeQueryInfo (_nqiReturns))
 import Hasura.NativeQuery.Lenses (nqiRelationships)
 import Hasura.Prelude
@@ -173,9 +174,16 @@ pruneDanglingDependents cache =
                 `onNothing` Left ("function " <> functionName <<> " is not tracked")
             SOILogicalModel logicalModelName ->
               void $ resolveLogicalModel sourceInfo logicalModelName
-            SOILogicalModelObj logicalModelName logicalModelObjId -> do
-              logicalModel <- resolveLogicalModel sourceInfo logicalModelName
+            SOILogicalModelObj logicalModelLocation logicalModelObjId -> do
+              (logicalModelDesc, logicalModel) <- case logicalModelLocation of
+                LMLLogicalModel logicalModelName ->
+                  (,) ("logical model " <>> logicalModelName) <$> resolveLogicalModel sourceInfo logicalModelName
+                LMLNativeQuery nativeQueryName ->
+                  (,) ("logical model for native query " <>> nativeQueryName)
+                    <$> resolveLogicalModelInNativeQuery sourceInfo nativeQueryName
               case logicalModelObjId of
+                LMOReferencedLogicalModel inner ->
+                  void $ resolveLogicalModel sourceInfo inner
                 LMOPerm roleName permType -> do
                   let rolePermissions :: Maybe (RolePermInfo b)
                       rolePermissions = logicalModel ^? lmiPermissions . ix roleName
@@ -184,13 +192,13 @@ pruneDanglingDependents cache =
                     $ Left
                     $ "no "
                     <> permTypeToCode permType
-                    <> " permission defined on logical model "
-                    <> logicalModelName
+                    <> " permission defined on "
+                    <> logicalModelDesc
                     <<> " for role "
                     <>> roleName
                 LMOCol column ->
                   unless (InsOrdHashMap.member column (_lmiFields logicalModel)) do
-                    Left ("Could not find column " <> column <<> " in logical model " <>> logicalModelName)
+                    Left ("Could not find column " <> column <<> " in " <>> logicalModelDesc)
             SOINativeQuery nativeQueryName -> do
               void $ resolveNativeQuery sourceInfo nativeQueryName
             SOINativeQueryObj nativeQueryName nativeQueryObjId -> do
@@ -274,6 +282,9 @@ pruneDanglingDependents cache =
       HashMap.lookup logicalModelName (_siLogicalModels sourceInfo)
         `onNothing` Left ("logical model " <> logicalModelName <<> " is not tracked")
 
+    resolveLogicalModelInNativeQuery sourceInfo nativeQueryName =
+      resolveNativeQuery sourceInfo nativeQueryName <&> \nq -> _nqiReturns nq
+
     columnToFieldName :: forall b. (Backend b) => TableInfo b -> Column b -> FieldName
     columnToFieldName _ = fromCol @b
 
@@ -346,13 +357,17 @@ deleteMetadataObject = \case
         siNativeQueries . ix nativeQueryName %~ case nativeQueryObjId of
           NQMORel name _ -> nqiRelationships %~ InsOrdHashMap.delete name
       SMOStoredProcedure name -> siStoredProcedures %~ HashMap.delete name
-      SMOLogicalModel name -> siLogicalModels %~ HashMap.delete name
-      SMOLogicalModelObj logicalModelName logicalModelObjectId ->
+      SMOLogicalModel name ->
+        -- TODO: if I'm inconsistent, delete everything that depends on me
+        siLogicalModels %~ HashMap.delete name
+      SMOLogicalModelObj (LMLLogicalModel logicalModelName) logicalModelObjectId ->
         siLogicalModels . ix logicalModelName %~ case logicalModelObjectId of
           LMMOPerm roleName PTSelect -> lmiPermissions . ix roleName . permSel .~ Nothing
           LMMOPerm roleName PTInsert -> lmiPermissions . ix roleName . permIns .~ Nothing
           LMMOPerm roleName PTUpdate -> lmiPermissions . ix roleName . permUpd .~ Nothing
           LMMOPerm roleName PTDelete -> lmiPermissions . ix roleName . permDel .~ Nothing
+          LMMOReferencedLogicalModel _ -> id
+      SMOLogicalModelObj (LMLNativeQuery _nativeQueryName) _logicalModelObjectId -> error "copy above pls"
       SMOTableObj tableName tableObjectId ->
         siTables . ix tableName %~ case tableObjectId of
           MTORel name _ -> tiCoreInfo . tciFieldInfoMap %~ HashMap.delete (fromRel name)

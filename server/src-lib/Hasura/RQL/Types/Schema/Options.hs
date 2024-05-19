@@ -4,6 +4,8 @@ module Hasura.RQL.Types.Schema.Options
   ( SchemaOptions (..),
     StringifyNumbers (..),
     DangerouslyCollapseBooleans (..),
+    BackwardsCompatibleNullInNonNullableVariables (..),
+    RemoteNullForwardingPolicy (..),
     InferFunctionPermissions (..),
     RemoteSchemaPermissions (..),
     OptimizePermissionFilters (..),
@@ -11,6 +13,8 @@ module Hasura.RQL.Types.Schema.Options
     IncludeStreamFields (..),
     IncludeUpdateManyFields (..),
     BigQueryStringNumericInput (..),
+    IncludeGroupByAggregateFields (..),
+    UsePostgresArrays (..),
   )
 where
 
@@ -22,12 +26,15 @@ import Hasura.Prelude
 data SchemaOptions = SchemaOptions
   { soStringifyNumbers :: StringifyNumbers,
     soDangerousBooleanCollapse :: DangerouslyCollapseBooleans,
+    soRemoteNullForwardingPolicy :: RemoteNullForwardingPolicy,
     soInferFunctionPermissions :: InferFunctionPermissions,
     soOptimizePermissionFilters :: OptimizePermissionFilters,
     soIncludeUpdateManyFields :: IncludeUpdateManyFields,
     soIncludeAggregationPredicates :: IncludeAggregationPredicates,
     soIncludeStreamFields :: IncludeStreamFields,
-    soBigQueryStringNumericInput :: BigQueryStringNumericInput
+    soBigQueryStringNumericInput :: BigQueryStringNumericInput,
+    soIncludeGroupByAggregateFields :: IncludeGroupByAggregateFields,
+    soPostgresArrays :: UsePostgresArrays
   }
 
 -- | Should we represent numbers in our responses as numbers, or strings?
@@ -83,6 +90,45 @@ instance ToJSON DangerouslyCollapseBooleans where
     DangerouslyCollapseBooleans -> Bool True
     Don'tDangerouslyCollapseBooleans -> Bool False
 
+-- | Should `null` values allowed for variables whose type is declared
+-- as non-nullable in a GraphQL query.
+-- Until version 2.34.0 (except 2.11.11), `null` value is validated for
+-- non-nullable variables. It is being fixed, to keep backwards compatible
+-- this option is introduced.
+data BackwardsCompatibleNullInNonNullableVariables
+  = AllowNullInNonNullableVariables
+  | Don'tAllowNullInNonNullableVariables
+  deriving (Eq, Show)
+
+instance FromJSON BackwardsCompatibleNullInNonNullableVariables where
+  parseJSON =
+    withBool "BackwardsCompatibleNullInNonNullableVariables"
+      $ pure
+      . bool Don'tAllowNullInNonNullableVariables AllowNullInNonNullableVariables
+
+instance ToJSON BackwardsCompatibleNullInNonNullableVariables where
+  toJSON = \case
+    AllowNullInNonNullableVariables -> Bool True
+    Don'tAllowNullInNonNullableVariables -> Bool False
+
+data RemoteNullForwardingPolicy
+  = RemoteForwardAccurately
+  | RemoteOnlyForwardNonNull
+  deriving (Show, Eq)
+
+instance FromJSON RemoteNullForwardingPolicy where
+  parseJSON =
+    withBool "RemoteNullForwardingPolicy"
+      $ pure
+      . \case
+        False -> RemoteForwardAccurately
+        True -> RemoteOnlyForwardNonNull
+
+instance ToJSON RemoteNullForwardingPolicy where
+  toJSON = \case
+    RemoteForwardAccurately -> Bool False
+    RemoteOnlyForwardNonNull -> Bool True
+
 -- | Should we infer function permissions? If this flag is set to
 -- 'InferFunctionPermissions', we may fail to build expression parsers
 -- in 'buildQueryAndSubscriptionFields' for users with unrecognised roles.
@@ -136,4 +182,17 @@ data OptimizePermissionFilters
 data BigQueryStringNumericInput
   = EnableBigQueryStringNumericInput
   | DisableBigQueryStringNumericInput
+  deriving (Eq, Show)
+
+data IncludeGroupByAggregateFields
+  = IncludeGroupByAggregateFields
+  | ExcludeGroupByAggregateFields
+  deriving (Eq, Show)
+
+-- | if we use Postgres arrays then an array of `text` becomes `[String!]`,
+-- however we want users to have the option to make it output `_text` like it
+-- did before for compatibility.
+data UsePostgresArrays
+  = UsePostgresArrays
+  | DontUsePostgresArrays
   deriving (Eq, Show)

@@ -2,7 +2,7 @@ version: "3.6"
 
 services:
   postgres:
-    image: postgis/postgis:15-3.3-alpine
+    image: postgis/postgis:16-3.4-alpine
     platform: linux/amd64
     command:
       - -F # turn fsync off for speed
@@ -17,6 +17,83 @@ services:
       test:
         - CMD-SHELL
         - psql -U "$${POSTGRES_USER:-postgres}" < /dev/null && sleep 5 && psql -U "$${POSTGRES_USER:-postgres}" < /dev/null
+      start_period: 5s
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  # setup for read replicas
+  postgresql-primary:
+    image: 'bitnami/postgresql:16'
+    ports:
+      - 5432
+    volumes:
+      - '/bitnami/postgresql'
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=master
+      - POSTGRESQL_REPLICATION_USER=repl_user
+      - POSTGRESQL_REPLICATION_PASSWORD=repl_password
+      - POSTGRESQL_USERNAME=hasura
+      - POSTGRESQL_PASSWORD=hasura
+      - POSTGRESQL_DATABASE=hasura
+      - ALLOW_EMPTY_PASSWORD=yes
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - export PGPASSWORD="$${POSTGRESQL_PASSWORD:-password}"
+        - psql -U "$${POSTGRESQL_USERNAME:-postgres}" < /dev/null && sleep 5 && psql -U "$${POSTGRESQL_USERNAME:-postgres}" < /dev/null
+      start_period: 5s
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  postgresql-replica-1:
+    image: 'bitnami/postgresql:16'
+    ports:
+      - 5432
+    depends_on:
+      postgresql-primary:
+        condition: service_healthy
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=slave
+      - POSTGRESQL_REPLICATION_USER=repl_user
+      - POSTGRESQL_REPLICATION_PASSWORD=repl_password
+      - POSTGRESQL_MASTER_HOST=postgresql-primary
+      - POSTGRESQL_USERNAME=hasura
+      - POSTGRESQL_PASSWORD=hasura
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - ALLOW_EMPTY_PASSWORD=yes
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - export PGPASSWORD="$${POSTGRESQL_PASSWORD:-password}"
+        - psql -U "$${POSTGRESQL_USERNAME:-postgres}" < /dev/null && sleep 5 && psql -U "$${POSTGRESQL_USERNAME:-postgres}" < /dev/null
+      start_period: 5s
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  postgresql-replica-2:
+    image: 'bitnami/postgresql:16'
+    ports:
+      - 5432
+    depends_on:
+      postgresql-primary:
+        condition: service_healthy
+    environment:
+      - POSTGRESQL_REPLICATION_MODE=slave
+      - POSTGRESQL_REPLICATION_USER=repl_user
+      - POSTGRESQL_REPLICATION_PASSWORD=repl_password
+      - POSTGRESQL_MASTER_HOST=postgresql-primary
+      - POSTGRESQL_USERNAME=hasura
+      - POSTGRESQL_PASSWORD=hasura
+      - POSTGRESQL_MASTER_PORT_NUMBER=5432
+      - ALLOW_EMPTY_PASSWORD=yes
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - export PGPASSWORD="$${POSTGRESQL_PASSWORD:-password}"
+        - psql -U "$${POSTGRESQL_USERNAME:-postgres}" < /dev/null && sleep 5 && psql -U "$${POSTGRESQL_USERNAME:-postgres}" < /dev/null
       start_period: 5s
       interval: 5s
       timeout: 10s
@@ -81,12 +158,8 @@ services:
       - /var/lib/postgresql/data
 
   sqlserver:
-    # We cannot use this image on arm64, as it's not available.
-    # Instead, we use `mcr.microsoft.com/azure-sql-edge`.
-    # This uses an environment variable so it can be overridden by scripts to
-    # provide that image instead.
-    image: ${MSSQL_IMAGE:-mcr.microsoft.com/mssql/server:2019-latest}
-    init: true # azure-sql-edge doesn't shut down properly without this
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    platform: linux/amd64
     ports:
       - 1433
     environment:
@@ -95,35 +168,15 @@ services:
       MSSQL_SA_PASSWORD: "Password!"
     volumes:
       - /var/opt/mssql
-
-  # We would prefer to attach the healthcheck directly to the `sqlserver` container.
-  # However, while we can do this in the `mcr.microsoft.com/mssql/server` image,
-  # it's not possible when running on macOS, as we don't use that image, but
-  # instead `mcr.microsoft.com/azure-sql-edge`.
-  # The `mcr.microsoft.com/azure-sql-edge` image does not provide `sqlcmd`.
-  # We therefore need to run it in a separate container.
-  # We can reconsider this once the MSSQL Server image can run on arm64.
-  sqlserver-healthcheck:
-    image: mcr.microsoft.com/mssql-tools
-    platform: linux/amd64
-    command:
-      - sleep
-      - inf
-    init: true # handle signals correctly
     healthcheck:
       test:
         - CMD-SHELL
         - |
-          /opt/mssql-tools/bin/sqlcmd -S 'sqlserver,1433' -U SA -P "Password!"
+          /opt/mssql-tools/bin/sqlcmd -U SA -P "$$SA_PASSWORD"
       start_period: 5s
       interval: 5s
       timeout: 10s
       retries: 20
-    # This is commented out because this file can be extended, and dependencies don't work for extensions.
-    # Instead, ensure you also run this one.
-    # depends_on:
-    #   sqlserver:
-    #     condition: service_started
 
   mysql:
     image: mysql

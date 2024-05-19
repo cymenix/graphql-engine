@@ -1,5 +1,3 @@
-{-# LANGUAGE TemplateHaskell #-}
-
 module Hasura.GraphQL.Explain
   ( explainGQLQuery,
     GQLExplain,
@@ -8,7 +6,6 @@ where
 
 import Control.Monad.Trans.Control (MonadBaseControl)
 import Data.Aeson qualified as J
-import Data.Aeson.TH qualified as J
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrdHashMap
 import Hasura.Backends.DataConnector.Agent.Client (AgentLicenseKey)
@@ -34,8 +31,10 @@ import Hasura.Prelude
 import Hasura.QueryTags
 import Hasura.RQL.IR
 import Hasura.RQL.Types.Roles (adminRoleName)
+import Hasura.RQL.Types.Schema.Options qualified as Options
 import Hasura.RQL.Types.SchemaCache
 import Hasura.SQL.AnyBackend qualified as AB
+import Hasura.Server.Init.Config (ResponseInternalErrorsConfig)
 import Hasura.Session (UserAdminSecret (..), UserInfo, UserRoleBuild (..), mkSessionVariablesText, mkUserInfo)
 import Hasura.Tracing (MonadTrace)
 import Language.GraphQL.Draft.Syntax qualified as G
@@ -46,12 +45,14 @@ data GQLExplain = GQLExplain
     _gqeUser :: !(Maybe (HashMap.HashMap Text Text)),
     _gqeIsRelay :: !(Maybe Bool)
   }
-  deriving (Show, Eq)
+  deriving (Show, Eq, Generic)
 
-$( J.deriveJSON
-     hasuraJSON {J.omitNothingFields = True}
-     ''GQLExplain
- )
+instance J.FromJSON GQLExplain where
+  parseJSON = J.genericParseJSON hasuraJSON {J.omitNothingFields = True}
+
+instance J.ToJSON GQLExplain where
+  toJSON = J.genericToJSON hasuraJSON {J.omitNothingFields = True}
+  toEncoding = J.genericToEncoding hasuraJSON {J.omitNothingFields = True}
 
 -- NOTE: This function has a 'MonadTrace' constraint in master, but we don't need it
 -- here. We should evaluate if we need it here.
@@ -71,7 +72,7 @@ explainQueryField ::
   m EncJSON
 explainQueryField agentLicenseKey userInfo reqHeaders operationName fieldName rootField = do
   case rootField of
-    RFRemote _ -> throw400 InvalidParams "only hasura queries can be explained"
+    RFRemote _ _ -> throw400 InvalidParams "only hasura queries can be explained"
     RFAction _ -> throw400 InvalidParams "query actions cannot be explained"
     RFRaw _ -> pure $ encJFromJValue $ ExplainPlan fieldName Nothing Nothing
     RFMulti _ -> pure $ encJFromJValue $ ExplainPlan fieldName Nothing Nothing
@@ -94,12 +95,14 @@ explainGQLQuery ::
     MonadQueryTags m,
     MonadTrace m
   ) =>
+  Options.BackwardsCompatibleNullInNonNullableVariables ->
   SchemaCache ->
   Maybe (CredentialCache AgentLicenseKey) ->
   [HTTP.Header] ->
   GQLExplain ->
+  ResponseInternalErrorsConfig ->
   m EncJSON
-explainGQLQuery sc agentLicenseKey reqHeaders (GQLExplain query userVarsRaw maybeIsRelay) = do
+explainGQLQuery nullInNonNullableVariables sc agentLicenseKey reqHeaders (GQLExplain query userVarsRaw maybeIsRelay) responseErrorsConfig = do
   -- NOTE!: we will be executing what follows as though admin role. See e.g. notes in explainField:
   userInfo <-
     mkUserInfo
@@ -112,7 +115,7 @@ explainGQLQuery sc agentLicenseKey reqHeaders (GQLExplain query userVarsRaw mayb
   case queryParts of
     G.TypedOperationDefinition G.OperationTypeQuery _ varDefs directives inlinedSelSet -> do
       (unpreparedQueries, _, _) <-
-        E.parseGraphQLQuery graphQLContext varDefs (GH._grVariables query) directives inlinedSelSet
+        E.parseGraphQLQuery nullInNonNullableVariables graphQLContext varDefs (GH._grVariables query) directives inlinedSelSet
       -- TODO: validate directives here
       encJFromList
         <$> for (InsOrdHashMap.toList unpreparedQueries) (uncurry (explainQueryField agentLicenseKey userInfo reqHeaders (_unOperationName <$> _grOperationName query)))
@@ -121,6 +124,7 @@ explainGQLQuery sc agentLicenseKey reqHeaders (GQLExplain query userVarsRaw mayb
     G.TypedOperationDefinition G.OperationTypeSubscription _ varDefs directives inlinedSelSet -> do
       (_normalizedDirectives, normalizedSelectionSet) <-
         ER.resolveVariables
+          nullInNonNullableVariables
           varDefs
           (fromMaybe mempty (GH._grVariables query))
           directives
@@ -131,15 +135,15 @@ explainGQLQuery sc agentLicenseKey reqHeaders (GQLExplain query userVarsRaw mayb
       -- TODO: validate directives here
       -- query-tags are not necessary for EXPLAIN API
       -- RequestContext are not necessary for EXPLAIN API
-      validSubscription <- E.buildSubscriptionPlan userInfo unpreparedQueries parameterizedQueryHash reqHeaders (_unOperationName <$> _grOperationName query)
+      ((validSubscription, _), _) <- E.buildSubscriptionPlan userInfo unpreparedQueries parameterizedQueryHash reqHeaders (_unOperationName <$> _grOperationName query) responseErrorsConfig
       case validSubscription of
         E.SEAsyncActionsWithNoRelationships _ -> throw400 NotSupported "async action query fields without relationships to table cannot be explained"
         E.SEOnSourceDB (E.SSLivequery actionIds liveQueryBuilder) -> do
           actionLogResponseMap <- fst <$> E.fetchActionLogResponses actionIds
-          (_, E.SubscriptionQueryPlan exists) <- liftEitherM $ liftIO $ runExceptT $ liveQueryBuilder actionLogResponseMap
+          (_, E.SubscriptionQueryPlan exists) <- liftEitherM $ liftIO $ runExceptT $ fst <$> liveQueryBuilder actionLogResponseMap
           AB.dispatchAnyBackend @BackendExecute exists \(E.MultiplexedSubscriptionQueryPlan execPlan) ->
             encJFromJValue <$> mkSubscriptionExplain execPlan
-        E.SEOnSourceDB (E.SSStreaming _ (_, E.SubscriptionQueryPlan exists)) -> do
+        E.SEOnSourceDB (E.SSStreaming _ ((_, E.SubscriptionQueryPlan exists), _modelInfo)) -> do
           AB.dispatchAnyBackend @BackendExecute exists \(E.MultiplexedSubscriptionQueryPlan execPlan) ->
             encJFromJValue <$> mkSubscriptionExplain execPlan
   where

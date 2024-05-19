@@ -7,10 +7,17 @@ module Harness.Services.GraphqlEngine.API
     HgeServerInstance (..),
     getHgeServerInstanceUrl,
     PostGraphql (..),
+    PostMetadata (..),
 
     -- * Api actions
     hgePost,
     hgePostGraphql,
+    hgePostGraphqlWithHeaders,
+    hgePostMetadata,
+    hgePostMetadataWithStatusAndHeaders,
+    hgePostExplain,
+    hgePostExplainRole,
+    hgePostV2Query,
     export_metadata,
     replace_metadata,
   )
@@ -39,7 +46,9 @@ getHgeServerInstanceUrl (HgeServerInstance {hgeServerHost, hgeServerPort}) =
 
 -- | Newtype-wrapper which enables late binding of 'postGraphql' on the test environment.
 -- This makes 'TestEnvironment'-based specs more readily compatible with componontised fixtures.
-newtype PostGraphql = PostGraphql {getPostGraphql :: J.Value -> IO J.Value}
+newtype PostGraphql = PostGraphql {getPostGraphql :: Http.RequestHeaders -> J.Value -> IO J.Value}
+
+newtype PostMetadata = PostMetadata {getPostMetadata :: Int -> Http.RequestHeaders -> J.Value -> IO J.Value}
 
 export_metadata :: (Has Logger env, Has HgeServerInstance env) => env -> IO Value
 export_metadata env = do
@@ -97,3 +106,96 @@ hgePostGraphql ::
   IO J.Value
 hgePostGraphql env query = do
   hgePost env 200 "/v1/graphql" [] (J.object ["query" J..= query])
+
+hgePostGraphqlWithHeaders ::
+  ( Has HgeServerInstance env,
+    Has Logger env
+  ) =>
+  env ->
+  Http.RequestHeaders ->
+  J.Value ->
+  IO J.Value
+hgePostGraphqlWithHeaders env headers query = do
+  hgePost env 200 "/v1/graphql" headers (J.object ["query" J..= query])
+
+hgePostV2Query ::
+  ( Has HgeServerInstance env,
+    Has Logger env
+  ) =>
+  env ->
+  J.Value ->
+  IO J.Value
+hgePostV2Query env query = do
+  hgePost env 200 "/v2/query" [] query
+
+hgePostMetadata ::
+  ( Has HgeServerInstance env,
+    Has Logger env
+  ) =>
+  env ->
+  J.Value ->
+  IO J.Value
+hgePostMetadata env = do
+  hgePost
+    env
+    200
+    "/v1/metadata"
+    []
+
+hgePostMetadataWithStatusAndHeaders ::
+  ( Has HgeServerInstance env,
+    Has Logger env
+  ) =>
+  env ->
+  Int ->
+  Http.RequestHeaders ->
+  J.Value ->
+  IO J.Value
+hgePostMetadataWithStatusAndHeaders env status headers = do
+  hgePost
+    env
+    status
+    "/v1/metadata"
+    headers
+
+-- | post to /v1/graphql/explain endpoint
+hgePostExplain ::
+  ( Has HgeServerInstance env,
+    Has Logger env
+  ) =>
+  env ->
+  Value ->
+  IO Value
+hgePostExplain env value =
+  withFrozenCallStack
+    $ hgePost
+      env
+      200
+      "/v1/graphql/explain"
+      mempty
+      [yaml|
+          query:
+            query: *value
+        |]
+
+hgePostExplainRole ::
+  ( Has HgeServerInstance env,
+    Has Logger env
+  ) =>
+  env ->
+  Text ->
+  Value ->
+  IO Value
+hgePostExplainRole env role value =
+  withFrozenCallStack
+    $ hgePost
+      env
+      200
+      "/v1/graphql/explain"
+      mempty
+      [yaml|
+          query:
+            query: *value
+          user:
+            x-hasura-role: *role
+        |]

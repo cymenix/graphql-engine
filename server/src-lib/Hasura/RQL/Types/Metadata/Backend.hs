@@ -12,8 +12,8 @@ import Hasura.Base.Error
 import Hasura.Function.Cache
 import Hasura.Incremental qualified as Inc
 import Hasura.Logging (Hasura, Logger)
-import Hasura.LogicalModel.Metadata (LogicalModelMetadata)
-import Hasura.NativeQuery.Metadata (NativeQueryMetadata)
+import Hasura.LogicalModel.Cache (LogicalModelInfo)
+import Hasura.NativeQuery.Metadata (ArgumentName, InterpolatedQuery, NativeQueryMetadata)
 import Hasura.Prelude
 import Hasura.RQL.IR.BoolExp
 import Hasura.RQL.Types.Backend
@@ -31,6 +31,7 @@ import Hasura.RQL.Types.SchemaCache.Build
 import Hasura.RQL.Types.Source
 import Hasura.RQL.Types.Source.Table (SourceTableInfo)
 import Hasura.SQL.Types
+import Hasura.Server.Init.FeatureFlag qualified as FF
 import Hasura.Server.Migrate.Version
 import Hasura.Services.Network
 import Hasura.StoredProcedure.Metadata (StoredProcedureConfig, StoredProcedureMetadata)
@@ -83,14 +84,16 @@ class
       ProvidesNetwork m
     ) =>
     Logger Hasura ->
+    Env.Environment ->
     (Inc.Dependency (Maybe (BackendInvalidationKeys b)), BackendConfig b) `arr` BackendInfo b
   default resolveBackendInfo ::
     ( Arrow arr,
       BackendInfo b ~ ()
     ) =>
     Logger Hasura ->
+    Env.Environment ->
     (Inc.Dependency (Maybe (BackendInvalidationKeys b)), BackendConfig b) `arr` BackendInfo b
-  resolveBackendInfo = const $ arr $ const ()
+  resolveBackendInfo _env = const $ arr $ const ()
 
   -- | Function that resolves the connection related source configuration, and
   -- creates a connection pool (and other related parameters) in the process
@@ -106,7 +109,11 @@ class
 
   -- | Function that introspects a database for tables, columns, functions etc.
   resolveDatabaseMetadata ::
-    (MonadIO m, MonadBaseControl IO m, MonadResolveSource m) =>
+    ( MonadIO m,
+      MonadBaseControl IO m,
+      MonadResolveSource m,
+      FF.HasFeatureFlagChecker m
+    ) =>
     Logger Hasura ->
     SourceMetadata b ->
     SourceConfig b ->
@@ -161,7 +168,7 @@ class
     EventTriggerConf b
 
   parseCollectableType ::
-    (MonadError QErr m) =>
+    (MonadError QErr m, MonadReader r m, Has (ScalarTypeParsingContext b) r) =>
     CollectableType (ColumnType b) ->
     Value ->
     m (PartialSQLExp b)
@@ -236,18 +243,20 @@ class
   validateNativeQuery ::
     (MonadIO m, MonadError QErr m) =>
     Env.Environment ->
+    SourceName ->
     SourceConnConfiguration b ->
-    LogicalModelMetadata b ->
+    SourceConfig b ->
+    LogicalModelInfo b ->
     NativeQueryMetadata b ->
-    m ()
-  validateNativeQuery _ _ _ _ =
+    m (InterpolatedQuery ArgumentName)
+  validateNativeQuery _ _ _ _ _ _ =
     throw500 "validateNativeQuery: not implemented for this backend."
 
   validateStoredProcedure ::
     (MonadIO m, MonadError QErr m) =>
     Env.Environment ->
     SourceConnConfiguration b ->
-    LogicalModelMetadata b ->
+    LogicalModelInfo b ->
     StoredProcedureMetadata b ->
     m ()
   validateStoredProcedure _ _ _ _ =
